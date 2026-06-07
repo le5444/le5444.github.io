@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, initial-scale=1.0">
+<title>哆啦B梦 - AI小说写作助手</title>
+<style>
+:root {
+  --bg: #fff; --bg2: #f8f9fb; --bg3: #f3f4f6; --border: #e5e7eb;
+  --text: #111827; --text2: #6b7280; --text3: #9ca3af;
+  --accent: #3b82f6; --accent-bg: #eff6ff; --red: #ef4444; --green: #22c55e; --orange: #f97316;
+  --radius: 6px; --radius-lg: 8px; --radius-xl: 12px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.05); --shadow: 0 1px 3px rgba(0,0,0,.1); --shadow-lg: 0 10px 20px rgba(0,0,0,.12);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:ui-sans-serif,system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif; background:var(--bg2); color:var(--text); }
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:3px; }
+button { cursor:pointer; font-family:inherit; border:none; outline:none; }
+input,textarea { font-family:inherit; }
+.icon { width:16px; height:16px; flex-shrink:0; display:inline-block; vertical-align:middle; }
+.icon-sm { width:14px; height:14px; flex-shrink:0; }
+.icon-lg { width:18px; height:18px; flex-shrink:0; }
+
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:13px; font-weight:500; border-radius:var(--radius); transition:all .15s; white-space:nowrap; background:transparent; }
+.btn-tool { color:var(--text2); padding:5px 8px; border-radius:var(--radius); background:transparent; }
+.btn-tool:hover { background:var(--bg3); color:var(--text); }
+.btn-primary { background:#18181b; color:#fff; padding:7px 14px; border-radius:var(--radius); font-size:13px; font-weight:500; }
+.btn-primary:hover { background:#27272a; }
+.btn-accent { background:var(--accent-bg); color:var(--accent); padding:6px 12px; border-radius:var(--radius); font-size:13px; font-weight:500; }
+.btn-accent:hover { background:#dbeafe; }
+
+.editor-content { min-height:400px; outline:none; font-size:15px; line-height:1.8; }
+.editor-content:empty::before { content:attr(data-placeholder); color:var(--text3); }
+
+.overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:100; display:none; align-items:center; justify-content:center; }
+.overlay.show { display:flex; }
+.dialog { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); max-height:85vh; display:flex; flex-direction:column; }
+
+.slide-panel { position:fixed; top:0; right:383px; width:380px; height:100vh; background:var(--bg); border-left:1px solid var(--border); box-shadow:0 4px 24px rgba(0,0,0,.08); z-index:40; display:none; flex-direction:column; }
+.slide-panel.show { display:flex; }
+
+.tab-btn { padding:8px 16px; font-size:13px; font-weight:500; background:transparent; border-bottom:2px solid transparent; color:var(--text2); }
+.tab-btn:hover { color:var(--text); }
+.tab-btn.active { color:var(--accent); border-bottom-color:var(--accent); }
+
+.tag { padding:4px 12px; border-radius:20px; font-size:12px; background:transparent; color:var(--text2); border:1px solid transparent; }
+.tag:hover { background:var(--bg3); }
+.tag.active { background:var(--accent-bg); color:var(--accent); font-weight:500; }
+
+.card { border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px; cursor:pointer; transition:all .15s; background:var(--bg); }
+.card:hover { border-color:var(--accent); background:var(--bg2); }
+.line-clamp-2 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+
+.tree-row { display:flex; align-items:center; height:32px; padding:0 4px; border-radius:4px; cursor:pointer; font-size:13px; color:var(--text2); white-space:nowrap; }
+.tree-row:hover { background:var(--bg3); }
+.tree-row.active { background:var(--accent-bg); color:var(--accent); }
+.tree-row .chevron { width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; margin-right:2px; color:var(--text3); }
+.tree-row .chevron svg { transition:transform .15s; }
+
+.nav-item { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:var(--radius-lg); color:var(--text2); font-size:14px; font-weight:500; cursor:pointer; transition:all .15s; }
+.nav-item:hover { background:var(--bg3); color:var(--text); }
+.nav-item.active { background:var(--accent-bg); color:var(--accent); }
+.fusion-entry {
+  position:fixed; top:14px; right:14px; z-index:120;
+  display:inline-flex; align-items:center; gap:8px;
+  padding:8px 12px; border-radius:var(--radius-lg);
+  background:#111827; color:#fff; box-shadow:var(--shadow-lg);
+  font-size:13px; font-weight:600; text-decoration:none;
+}
+.fusion-entry:hover { background:#1f2937; }
+.fusion-entry span { color:#bfdbfe; font-weight:500; }
+@media (max-width:720px) {
+  .fusion-entry { left:12px; right:12px; top:10px; justify-content:center; }
+}
+</style>
+</head>
+<body style="display:flex; height:100vh; width:100%; overflow:hidden;">
+<a class="fusion-entry" href="/" title="进入已融合开书底本、续写卡和反崩盘记忆的新工作台">进入织梦工作台 <span>融合向导</span></a>
+
+<!-- ==================== 第一栏：左侧导航侧栏 ==================== -->
+<div style="width:260px; min-width:260px; height:100vh; background:var(--bg2); border-right:1px solid var(--border); display:flex; flex-direction:column; z-index:5;">
+
+  <!-- 文档树 -->
+  <div style="flex:1; overflow-y:auto; padding:8px;">
+
+    <!-- 文档树区域 -->
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 8px; margin-bottom:4px;">
+      <span style="font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.5px;">作品目录</span>
+      <div style="display:flex; gap:0;">
+        <button class="btn btn-tool" style="width:28px; height:28px; border-radius:var(--radius-lg) 0 0 var(--radius-lg); border:1px solid var(--border);" title="新建文件夹">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+        </button>
+        <button class="btn btn-tool" style="width:28px; height:28px; border:1px solid var(--border); border-left:0; border-radius:0;" title="新建文件">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/></svg>
+        </button>
+        <button class="btn btn-tool" style="width:22px; height:28px; border:1px solid var(--border); border-left:1px solid var(--border); border-radius:0 var(--radius-lg) var(--radius-lg) 0;" title="更多">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 未命名 -->
+    <div class="tree-row">
+      <span class="chevron">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;transform:rotate(90deg);"><path d="m9 18 6-6-6-6"/></svg>
+      </span>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+      <span style="margin-left:5px; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis;">未命名</span>
+    </div>
+    <!-- 主要内容 -->
+    <div class="tree-row" style="padding-left:16px;">
+      <span class="chevron">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;transform:rotate(90deg);"><path d="m9 18 6-6-6-6"/></svg>
+      </span>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span style="margin-left:5px;">主要内容</span>
+    </div>
+    <!-- 第一卷 -->
+    <div class="tree-row" style="padding-left:32px;">
+      <span class="chevron">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;transform:rotate(90deg);"><path d="m9 18 6-6-6-6"/></svg>
+      </span>
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span style="margin-left:5px;">第一卷</span>
+    </div>
+    <!-- 第一章 active -->
+    <div class="tree-row active" style="padding-left:48px; border-left:2px solid var(--accent); margin-left:10px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>
+      <span style="margin-left:5px;">第一章</span>
+    </div>
+
+    <div style="height:1px; background:var(--border); margin:8px 0;"></div>
+
+    <!-- 设定 -->
+    <div class="tree-row" style="padding-left:8px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-.28 2.82 2 2 0 0 1-2.55-.04l-.06-.06a1.65 1.65 0 0 0-1.82-.33A1.65 1.65 0 0 0 14 20.82V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33 2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83 2 2 0 0 0 0 0l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span style="margin-left:5px;">设定</span>
+    </div>
+    <!-- 角色 -->
+    <div class="tree-row" style="padding-left:8px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span style="margin-left:5px;">角色</span>
+    </div>
+    <!-- 知识库 -->
+    <div class="tree-row" style="padding-left:8px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      <span style="margin-left:5px;">知识库</span>
+    </div>
+  </div>
+
+  <!-- 底部工具 -->
+  <div style="padding:8px; border-top:1px solid var(--border);">
+    <button class="btn btn-tool" style="justify-content:flex-start; width:100%; padding:8px 12px; font-size:13px;">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>
+      AI分析
+    </button>
+    <div style="display:flex; flex-direction:column; gap:2px; margin:4px 0;">
+      <button class="btn btn-tool" style="justify-content:flex-start; width:100%; padding:8px 12px; font-size:13px;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        剧情分析
+      </button>
+      <button class="btn btn-tool" style="justify-content:flex-start; width:100%; padding:8px 12px; font-size:13px;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        人物关系
+      </button>
+      <button class="btn btn-tool" style="justify-content:flex-start; width:100%; padding:8px 12px; font-size:13px;">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        漏洞分析
+      </button>
+    </div>
+    <div style="display:flex; gap:6px; margin-top:6px;">
+      <button class="btn btn-tool" style="flex:1; justify-content:center; padding:6px; border:1px solid var(--border); border-radius:var(--radius); font-size:12px;">上传文件</button>
+      <button class="btn btn-tool" style="flex:1; justify-content:center; padding:6px; border:1px solid var(--border); border-radius:var(--radius); font-size:12px;">导出</button>
+    </div>
+    <button class="btn-primary" style="width:100%; margin-top:6px; justify-content:center;">保存作品</button>
+  </div>
+</div>
+
+<!-- ==================== 第二栏：编辑区 ==================== -->
+<div style="flex:1; display:flex; flex-direction:column; min-width:0; background:var(--bg);">
+
+  <!-- 顶部 -->
+  <div style="display:flex; align-items:center; justify-content:flex-start; padding:8px 16px; border-bottom:1px solid var(--border); background:var(--bg);">
+    <div style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:var(--text);">
+      <span style="width:28px; height:28px; background:linear-gradient(135deg,var(--accent),#8b5cf6); border-radius:8px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:700;">B</span>
+      哆啦B梦
+    </div>
+  </div>
+
+  <!-- 编辑工具栏 -->
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 16px; border-bottom:1px solid var(--border); background:var(--bg2);">
+    <div style="display:flex; align-items:center;">
+      <span style="font-size:12px; color:var(--text3); margin-right:8px;">字数: <span style="color:var(--text2);" id="wc">0</span></span>
+      <div style="width:1px; height:18px; background:var(--border); margin:0 6px;"></div>
+      <button class="btn btn-tool" style="font-size:12px;" onclick="openPanel('chaishu')">AI拆书</button>
+      <button class="btn btn-tool" style="font-size:12px;" onclick="openPanel('shengao')">AI审稿</button>
+      <button class="btn btn-tool" style="font-size:12px;" onclick="openPanel('xiaohen')">AI消痕</button>
+      <button class="btn btn-tool" style="font-size:12px;" onclick="openPanel('jiancha')"><span style="color:var(--red);font-weight:600;">错</span> AI检查</button>
+      <div style="display:flex;">
+        <button class="btn btn-tool" style="font-size:12px; border-radius:var(--radius) 0 0 var(--radius);">智能排版</button>
+        <button class="btn btn-tool" style="font-size:12px; padding:5px 4px; border-radius:0 var(--radius) var(--radius) 0;">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div style="width:1px; height:18px; background:var(--border); margin:0 6px;"></div>
+      <button class="btn btn-tool" style="font-size:12px; gap:4px;" onclick="toggleOverlay('ovlTime')">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        时光机
+      </button>
+    </div>
+    <div style="display:flex; align-items:center; gap:2px;">
+      <button class="btn btn-tool" style="font-size:12px; min-width:56px; border-radius:4px;" onclick="readAloud()">阅读</button>
+      <button class="btn btn-tool" style="font-size:12px; min-width:56px; border-radius:4px;" id="hlBtn" onclick="toggleHL()">高亮</button>
+      <button class="btn btn-tool" style="font-size:12px; gap:3px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg);" onclick="clearEd()">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        清空
+      </button>
+      <button class="btn btn-tool" style="font-size:12px; gap:3px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg);" onclick="copyEd()">
+        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+        复制
+      </button>
+    </div>
+  </div>
+
+  <!-- 编辑区 -->
+  <div style="flex:1; overflow-y:auto; padding:32px 48px;">
+    <input type="text" value="第一章" placeholder="请输入标题" style="width:100%; border:none; outline:none; font-size:24px; font-weight:700; margin-bottom:20px; background:transparent;">
+
+    <!-- 章节概要 -->
+    <div style="background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; margin-bottom:24px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <div style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text2);">
+          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span style="font-weight:500;">章节概要</span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-accent" style="font-size:12px;">总结当前章节概要</button>
+          <button class="btn btn-tool" style="font-size:12px; padding:5px 10px; border:1px solid var(--border); border-radius:var(--radius);">批量生成概要</button>
+        </div>
+      </div>
+      <textarea style="width:100%; background:transparent; border:none; outline:none; resize:none; font-size:13px; color:var(--text2); line-height:1.6; height:140px;">时间地点: 未提供。
+
+内容总结: 未检测到需要分析的文章内容，当前无法生成大纲摘要。
+
+关键事件:
+1. 缺少原文，无法提炼事件链。
+2. 缺少情节材料，无法判断冲突与转折。
+
+人物与互动: 未提供，无法分析人物关系与互动。
+伏笔与钩子: 未提供，无法判断伏笔、悬念与后续钩子。
+请发送文章全文或片段。</textarea>
+    </div>
+
+    <!-- 正文 -->
+    <div class="editor-content" id="ed" data-placeholder="开始书写你的故事..." contenteditable="true" oninput="document.getElementById('wc').textContent=this.innerText.length"></div>
+  </div>
+</div>
+
+<!-- ==================== 第三栏：对话面板 ==================== -->
+<div style="width:383px; min-width:240px; height:100vh; background:var(--bg); border-left:1px solid var(--border); display:flex; flex-direction:column; box-shadow:var(--shadow-sm); z-index:5;">
+
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; border-bottom:1px solid var(--border); height:48px;">
+    <select id="chatMode" onchange="switchChat()" style="appearance:none; background:var(--accent-bg); border:1px solid #bfdbfe; border-radius:var(--radius); padding:6px 28px 6px 12px; font-size:13px; font-weight:500; color:var(--accent); outline:none; background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22%3E%3Cpath d=%22m6 9 6 6 6-6%22 stroke=%22%233b82f6%22 stroke-width=%222%22 fill=%22none%22/%3E%3C/svg%3E'); background-repeat:no-repeat; background-position:right 8px center;">
+      <option value="chat">对话</option>
+      <option value="ghost">代写(测试)</option>
+      <option value="workflow">工作流</option>
+    </select>
+    <div style="display:flex; gap:4px;">
+      <button class="btn btn-accent" style="font-size:12px;">新建对话</button>
+      <button class="btn btn-tool" style="font-size:12px; gap:4px;">历史记录</button>
+    </div>
+  </div>
+
+  <!-- 对话内容 -->
+  <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center;" id="chatContent">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" style="margin-bottom:12px;"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg>
+    <p style="font-size:13px; color:var(--text2); line-height:1.6;" id="chatDesc">对话区域，输入任何你对小说的疑问，比如"人物设定如何修改"，"文章建议"。</p>
+    <button class="btn btn-accent" style="margin-top:8px; font-size:12px; gap:4px;" onclick="toggleOverlay('ovlBilling')">
+      <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      计费规则
+    </button>
+  </div>
+
+  <!-- 关联 -->
+  <div style="padding:6px 12px; border-top:1px solid var(--border); display:flex; gap:4px;">
+    <button class="btn btn-tool" style="flex:1; justify-content:center; font-size:12px; padding:6px; border:1px solid var(--border); border-radius:var(--radius);">关联内容</button>
+    <button class="btn btn-tool" style="flex:1; justify-content:center; font-size:12px; padding:6px; border:1px solid var(--border); border-radius:var(--radius);">添加文件</button>
+    <button class="btn btn-tool" style="font-size:12px; padding:6px 8px; border:1px solid var(--border); border-radius:var(--radius);">总计: 0字 (1个片段)</button>
+  </div>
+  <!-- 章节标签 -->
+  <div style="padding:4px 12px;">
+    <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:4px; font-size:12px; background:var(--accent-bg); color:var(--accent);">第一章</span>
+  </div>
+  <!-- 输入 -->
+  <div style="padding:12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:8px;">
+    <div style="display:flex; gap:4px;">
+      <button class="btn btn-tool" style="flex:1; justify-content:flex-start; padding:7px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; color:var(--text3);" onclick="toggleOverlay('ovlPrompt')">选择提示词</button>
+      <button class="btn btn-tool" style="width:32px; height:32px; border:1px solid var(--border); border-radius:var(--radius);">⋯</button>
+    </div>
+    <div style="display:flex; align-items:center; justify-content:space-between;">
+      <button class="btn btn-accent" style="gap:6px;">大师模型(最新版)</button>
+      <div style="display:flex; gap:4px; align-items:center;">
+        <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--text3); cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 全自动执行</label>
+        <button class="btn" style="width:32px; height:32px; background:var(--accent); color:#fff; border-radius:var(--radius-lg);">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 5 5L20 7"/></svg>
+        </button>
+      </div>
+    </div>
+    <input type="text" placeholder="请输入指令，使用@可以快速关联内容" style="width:100%; border:1px solid var(--border); border-radius:var(--radius); padding:8px 12px; font-size:13px; outline:none;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+  </div>
+</div>
+
+<!-- ==================== AI拆书面板 ==================== -->
+<div class="slide-panel" id="pnlChaishu">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">
+    <strong style="font-size:14px;">AI拆书</strong>
+    <button class="btn btn-tool" onclick="closePanels()">✕</button>
+  </div>
+  <div style="padding:10px 16px; border-bottom:1px solid var(--border); display:flex; gap:6px;">
+    <button class="tag active" onclick="this.parentElement.querySelectorAll('.tag').forEach(t=>t.classList.remove('active'));this.classList.add('active')">快速拆</button>
+    <button class="tag" onclick="this.parentElement.querySelectorAll('.tag').forEach(t=>t.classList.remove('active'));this.classList.add('active')">分章拆</button>
+  </div>
+  <div style="padding:12px 16px; border-bottom:1px solid var(--border);">
+    <div style="display:flex; gap:4px; margin-bottom:6px;">
+      <button class="btn btn-tool" style="font-size:11px; border:1px solid var(--border); border-radius:var(--radius);">增选10章</button>
+      <button class="btn btn-tool" style="font-size:11px; border:1px solid var(--border); border-radius:var(--radius);">增选50章</button>
+      <button class="btn btn-tool" style="font-size:11px; border:1px solid var(--border); border-radius:var(--radius);">全选</button>
+      <button class="btn btn-tool" style="font-size:11px; border:1px solid var(--border); border-radius:var(--radius);">清空</button>
+    </div>
+    <div style="font-size:12px; color:var(--text2);">已选择 <b>0</b> 章，最多选择 1 章</div>
+    <div style="margin-top:6px; padding:6px 10px; background:var(--bg2); border-radius:var(--radius); font-size:12px;">1. 第一章</div>
+  </div>
+  <div style="padding:12px 16px; flex:1; overflow-y:auto;">
+    <div style="font-size:12px; font-weight:600; margin-bottom:8px;">拆解内容选择</div>
+    <div style="display:flex; gap:6px; margin-bottom:10px;">
+      <button class="btn btn-tool" style="font-size:11px; border:1px solid var(--border); border-radius:var(--radius);">全选</button>
+      <button class="btn btn-tool" style="font-size:11px; border:1px solid var(--border); border-radius:var(--radius);">清空</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 黄金三章</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 主线剧情</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 支线剧情</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 主题分析</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 角色分析</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 世界设定</label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;"><input type="checkbox" style="accent-color:var(--accent);"> 写作风格与技巧</label>
+    </div>
+  </div>
+  <div style="padding:12px 16px; border-top:1px solid var(--border);">
+    <button class="btn-primary" style="width:100%; justify-content:center;">开始拆解</button>
+  </div>
+</div>
+
+<!-- ==================== AI审稿面板 ==================== -->
+<div class="slide-panel" id="pnlShengao">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">
+    <strong style="font-size:14px;">AI审稿</strong>
+    <button class="btn btn-tool" onclick="closePanels()">✕</button>
+  </div>
+  <div style="padding:32px 16px; text-align:center; flex:1;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    <p style="font-size:13px; color:var(--text2); margin-top:12px; line-height:1.6;">AI审稿从商业角度帮你审稿<br>包含毒点预测和读者群体预测</p>
+    <button class="btn-primary" style="margin-top:16px;">开始审稿</button>
+  </div>
+</div>
+
+<!-- ==================== AI消痕面板 ==================== -->
+<div class="slide-panel" id="pnlXiaohen">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">
+    <strong style="font-size:14px;">AI消痕</strong>
+    <button class="btn btn-tool" onclick="closePanels()">✕</button>
+  </div>
+  <div style="padding:32px 16px; text-align:center; flex:1;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    <p style="font-size:13px; color:var(--text2); margin-top:12px; line-height:1.6;">去除AI生成痕迹<br>降低朱雀等AI检测工具的检测率</p>
+    <button class="btn-primary" style="margin-top:16px;">开始消痕</button>
+  </div>
+</div>
+
+<!-- ==================== AI检查面板 ==================== -->
+<div class="slide-panel" id="pnlJiancha">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--border);">
+    <strong style="font-size:14px;">AI检查和建议</strong>
+    <button class="btn btn-tool" onclick="closePanels()">✕</button>
+  </div>
+  <div style="padding:12px 16px; flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px;">
+    <div style="border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <strong style="font-size:13px;">规则1: 翻译所有非中文文本</strong>
+        <div style="display:flex; gap:4px;"><button class="btn btn-tool" style="font-size:11px;">编辑</button><button class="btn btn-tool" style="font-size:11px; color:var(--red);">删除</button></div>
+      </div>
+      <p style="font-size:12px; color:var(--text2);">对于所有非中文文本，将其翻译成中文</p>
+    </div>
+    <div style="border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <strong style="font-size:13px;">规则2: 检查所有文本的错字</strong>
+        <div style="display:flex; gap:4px;"><button class="btn btn-tool" style="font-size:11px;">编辑</button><button class="btn btn-tool" style="font-size:11px; color:var(--red);">删除</button></div>
+      </div>
+      <p style="font-size:12px; color:var(--text2);">检查所有错别字，即不符合前后文的错字，并给出修改建议</p>
+    </div>
+    <div style="border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <strong style="font-size:13px;">规则3: 移除AI味形容词，简化语言</strong>
+        <div style="display:flex; gap:4px;"><button class="btn btn-tool" style="font-size:11px;">编辑</button><button class="btn btn-tool" style="font-size:11px; color:var(--red);">删除</button></div>
+      </div>
+      <p style="font-size:12px; color:var(--text2);">减少例如"嘴角勾起一抹玩味的弧度"，"全场死一般的寂静"等形容词，合理重写</p>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-tool" style="font-size:12px; padding:6px 12px; border:1px solid var(--border); border-radius:var(--radius);">快速添加规则</button>
+      <button class="btn btn-tool" style="font-size:12px; padding:6px 12px; border:1px solid var(--border); border-radius:var(--radius);">添加公开规则</button>
+    </div>
+  </div>
+  <div style="padding:12px 16px; border-top:1px solid var(--border);">
+    <button class="btn-primary" style="width:100%; justify-content:center;">开始检查</button>
+  </div>
+</div>
+
+<!-- ==================== 时光机弹窗 ==================== -->
+<div class="overlay" id="ovlTime">
+  <div class="dialog" style="width:460px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:16px; border-bottom:1px solid var(--border);">
+      <h2 style="font-size:16px; font-weight:700;">时光机</h2>
+      <button class="btn btn-tool" onclick="toggleOverlay('ovlTime')">✕</button>
+    </div>
+    <div style="padding:32px 24px; text-align:center;">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" style="margin-bottom:12px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      <p style="font-size:14px; font-weight:500;">管理和恢复历史版本</p>
+      <p style="font-size:13px; color:var(--text3); margin-top:4px;">暂无历史版本</p>
+      <p style="font-size:12px; color:var(--text2); margin-top:12px; line-height:1.6;">编辑器会自动保存您的更改<br>自动清理：超过3天或50个版本</p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 计费规则弹窗 ==================== -->
+<div class="overlay" id="ovlBilling">
+  <div class="dialog" style="width:440px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:16px; border-bottom:1px solid var(--border);">
+      <h2 style="font-size:16px; font-weight:700;">对话计费规则</h2>
+      <button class="btn btn-tool" onclick="toggleOverlay('ovlBilling')">✕</button>
+    </div>
+    <div style="padding:16px; font-size:13px; line-height:1.8; color:var(--text2); max-height:400px; overflow-y:auto;">
+      <div style="background:var(--accent-bg); border-radius:var(--radius); padding:10px 14px; margin-bottom:12px; color:var(--accent); font-weight:500;">会员不扣除任何字数</div>
+      <button class="btn-primary" style="width:100%; margin-bottom:16px;">充值会员</button>
+      <div style="font-weight:600; color:var(--text); margin-bottom:8px;">非会员扣费规则</div>
+      <div style="margin-bottom:12px;">
+        <div style="font-weight:500; color:var(--text);">1. 输入计费</div>
+        <div>输入字数 = 关联字数 + 前文对话字数 + 用户输入内容字数</div>
+        <div style="margin-top:4px;">· 2万字以下免费</div>
+        <div>· 2万字以上超出的部分，按 输入字数÷20 计算字数消耗</div>
+      </div>
+      <div>
+        <div style="font-weight:500; color:var(--text);">2. 输出计费</div>
+        <div>输出字数 = 模型输出字数</div>
+        <div>根据模型倍率，进行输出字数扣费</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 提示词模板弹窗 ==================== -->
+<div class="overlay" id="ovlPrompt">
+  <div class="dialog" style="width:720px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:16px; border-bottom:1px solid var(--border);">
+      <h2 style="font-size:16px; font-weight:700;">选择提示词模版</h2>
+      <button class="btn btn-tool" onclick="toggleOverlay('ovlPrompt')">✕</button>
+    </div>
+    <div style="display:flex; padding:0 16px; border-bottom:1px solid var(--border);">
+      <button class="tab-btn active" onclick="switchTab(this)">公开模版</button>
+      <button class="tab-btn" onclick="switchTab(this)">收藏模板</button>
+      <button class="tab-btn" onclick="switchTab(this)">自定义模版</button>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px; padding:10px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
+      <button class="tag active" onclick="switchTag(this)">全部篇幅</button>
+      <button class="tag" onclick="switchTag(this)">通用</button>
+      <button class="tag" onclick="switchTag(this)">超短篇</button>
+      <button class="tag" onclick="switchTag(this)">短篇</button>
+      <button class="tag" onclick="switchTag(this)">中篇</button>
+      <button class="tag" onclick="switchTag(this)">长篇</button>
+      <button class="tag" onclick="switchTag(this)">剧本</button>
+      <div style="flex:1;"></div>
+      <input type="text" placeholder="搜索公开模版..." style="width:150px; border:1px solid var(--border); border-radius:var(--radius); padding:4px 10px; font-size:12px; outline:none; background:var(--bg2);">
+      <select style="appearance:none; background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:4px 24px 4px 8px; font-size:12px; color:var(--text2); outline:none; background-image:url('data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22%3E%3Cpath d=%22m6 9 6 6 6-6%22 stroke=%22%239ca3af%22 stroke-width=%222%22 fill=%22none%22/%3E%3C/svg%3E'); background-repeat:no-repeat; background-position:right 6px center;">
+        <option>全部类型</option><option>综合</option>
+      </select>
+    </div>
+    <div style="flex:1; overflow-y:auto; padding:12px 16px; max-height:360px;">
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex; gap:12px;">
+          <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;">君</div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;justify-content:space-between;"><strong style="font-size:14px;">【君君】大神文风，首秀4000当天【不限题材！】</strong><span style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;">1399 ⭐5.0</span></div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px;">君君</div>
+            <p class="line-clamp-2" style="font-size:12px;color:var(--text2);margin-top:4px;">本指令作者：番茄LV5作者、阅文签约作家，曾过稿多个平台保底，带出过50万在读 推荐模型：专业、至强、其他任意 1.不限题材，无限续写 2.延续文风 3.多对话，兼具网感</p>
+            <div style="font-size:10px;color:var(--text3);margin-top:6px;">创建: 2026年5月30日 · 更新: 2026年6月2日</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;margin-left:52px;">
+          <button class="btn btn-tool" style="font-size:12px;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius);">收藏</button>
+          <button class="btn btn-accent" style="font-size:12px;">查看模版</button>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:10px;">
+        <div style="display:flex; gap:12px;">
+          <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#a78bfa,#c4b5fd);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;">柠</div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;justify-content:space-between;"><strong style="font-size:14px;">【青柠爆爽正文-2.0.1】番茄大神执笔，一键解放双手！</strong><span style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;">600548 ⭐4.5</span></div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px;">青柠</div>
+            <p style="font-size:12px;color:var(--text2);margin-top:4px;">别说话，吻我！</p>
+            <div style="font-size:10px;color:var(--text3);margin-top:6px;">创建: 2025年9月4日 · 更新: 2026年3月24日</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;margin-left:52px;">
+          <button class="btn btn-tool" style="font-size:12px;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius);">收藏</button>
+          <button class="btn btn-accent" style="font-size:12px;">查看模版</button>
+        </div>
+      </div>
+      <div class="card">
+        <div style="display:flex; gap:12px;">
+          <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#fbbf24);flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;">柚</div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;justify-content:space-between;"><strong style="font-size:14px;">柚子Ⅰ起点代写级Ⅰ【吞了个真人】</strong><span style="font-size:11px;color:var(--text3);flex-shrink:0;margin-left:8px;">485180 ⭐4.1</span></div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px;">柚子</div>
+            <p class="line-clamp-2" style="font-size:12px;color:var(--text2);margin-top:4px;">此模板已经经过起点作者的使用，深度模仿真人作者，基本无AI味 ①自然叙事 ②永不收费 ③文风优良</p>
+            <div style="font-size:10px;color:var(--text3);margin-top:6px;">创建: 2025年11月7日 · 更新: 2026年1月20日</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;margin-left:52px;">
+          <button class="btn btn-tool" style="font-size:12px;padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius);">收藏</button>
+          <button class="btn btn-accent" style="font-size:12px;">查看模版</button>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-top:1px solid var(--border);">
+      <div style="display:flex;gap:2px;font-size:12px;">
+        <button class="btn btn-tool" style="width:28px;height:28px;">◀</button>
+        <button class="btn" style="width:28px;height:28px;background:var(--accent);color:#fff;border-radius:4px;">1</button>
+        <button class="btn btn-tool" style="width:28px;height:28px;">2</button>
+        <button class="btn btn-tool" style="width:28px;height:28px;">3</button>
+        <span style="color:var(--text3);">...</span>
+        <button class="btn btn-tool" style="width:28px;height:28px;">189</button>
+        <button class="btn btn-tool" style="width:28px;height:28px;">▶</button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-tool" style="font-size:13px;padding:6px 16px;border:1px solid var(--border);border-radius:var(--radius);" onclick="toggleOverlay('ovlPrompt')">取消</button>
+        <button class="btn" style="font-size:13px;padding:6px 16px;border-radius:var(--radius);background:#e5e7eb;color:#9ca3af;cursor:not-allowed;" disabled>应用</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function openPanel(t) {
+  closePanels();
+  const m={chaishu:'pnlChaishu',shengao:'pnlShengao',xiaohen:'pnlXiaohen',jiancha:'pnlJiancha'};
+  document.getElementById(m[t]).classList.add('show');
+}
+function closePanels(){document.querySelectorAll('.slide-panel').forEach(p=>p.classList.remove('show'));}
+function toggleOverlay(id){
+  const el=document.getElementById(id);
+  el.classList.toggle('show');
+}
+function toggleHL(){
+  const b=document.getElementById('hlBtn'),e=document.getElementById('ed');
+  b.classList.toggle('active');
+  if(b.classList.contains('active')){e.style.background='#f8f9fb';b.style.background='var(--accent)';b.style.color='#fff';}
+  else{e.style.background='';b.style.background='';b.style.color='';}
+}
+function readAloud(){
+  const t=document.getElementById('ed').innerText;
+  if(t.trim()){const u=new SpeechSynthesisUtterance(t.substring(0,500));u.lang='zh-CN';u.rate=0.9;speechSynthesis.speak(u);}
+}
+function clearEd(){if(confirm('确定清空？')){document.getElementById('ed').innerHTML='';document.getElementById('wc').textContent='0';}}
+function copyEd(){navigator.clipboard.writeText(document.getElementById('ed').innerText).then(()=>alert('已复制'));}
+function switchChat(){
+  const m=document.getElementById('chatMode').value,d=document.getElementById('chatDesc');
+  d.textContent=m==='chat'?'对话区域，输入任何你对小说的疑问，比如"人物设定如何修改"，"文章建议"。':m==='ghost'?'代写区域，输入要求，大模型会自动按照要求执行任务':'工作流区域，工作流适合执行固定的操作步骤，请选择下方提示词模板开始执行';
+}
+function switchTab(el){el.parentElement.querySelectorAll('.tab-btn').forEach(t=>t.classList.remove('active'));el.classList.add('active');}
+function switchTag(el){el.parentElement.querySelectorAll('.tag').forEach(t=>t.classList.remove('active'));el.classList.add('active');}
+document.querySelectorAll('.overlay').forEach(o=>{o.addEventListener('click',function(e){if(e.target===this)this.classList.remove('show');});});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){closePanels();document.querySelectorAll('.overlay').forEach(o=>o.classList.remove('show'));}});
+</script>
+</body>
+</html>
