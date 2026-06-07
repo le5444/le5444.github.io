@@ -1,0 +1,7 @@
+[package]
+name = "zhimeng-personal-os-core"
+version = "0.1.0"
+edition = "2021"
+description = "Rust wrapper for the Zhimeng Personal OS Python Gateway"
+
+[dependencies]

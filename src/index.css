@@ -1,0 +1,372 @@
+@import "tailwindcss";
+
+/* TipTap placeholder */
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #64748b;
+  pointer-events: none;
+  height: 0;
+}
+[data-theme="light"] .tiptap p.is-editor-empty:first-child::before {
+  color: #94a3b8;
+}
+
+.novel-editor-frame {
+  min-height: 560px;
+}
+
+.novel-editor-content .ProseMirror {
+  min-height: 520px;
+  padding-bottom: 38vh;
+}
+
+.novel-editor-content .ProseMirror p {
+  margin: 0 0 0.9em;
+}
+
+@media (min-height: 850px) {
+  .novel-editor-frame {
+    min-height: calc(100vh - 270px);
+  }
+
+  .novel-editor-content .ProseMirror {
+    min-height: calc(100vh - 330px);
+  }
+}
+
+@media (min-height: 1180px) {
+  .novel-editor-frame {
+    min-height: 900px;
+  }
+}
+
+@media (max-width: 768px) {
+  .novel-editor-frame {
+    min-height: calc(100vh - 220px);
+  }
+
+  .novel-editor-content .ProseMirror {
+    min-height: calc(100vh - 280px);
+    padding-bottom: 45vh;
+  }
+}
+
+/* ============================================ */
+/* 日间模式：高对比度版本                       */
+/* ============================================ */
+[data-theme="light"] {
+  color-scheme: light;
+  background: #eef2f7;
+}
+
+/* 背景色映射（深 → 浅） */
+[data-theme="light"] [class*="bg-slate-950"] { background-color: #f1f5f9 !important; }
+[data-theme="light"] [class*="bg-slate-900"] { background-color: #ffffff !important; }
+[data-theme="light"] [class*="bg-slate-800"] { background-color: #e8eef6 !important; }
+[data-theme="light"] [class*="bg-slate-700"] { background-color: #d7e0ec !important; }
+
+/* 半透明背景修复 */
+[data-theme="light"] [class*="bg-slate-950/"] { background-color: rgba(241, 245, 249, 0.8) !important; }
+[data-theme="light"] [class*="bg-slate-900/"] { background-color: rgba(255, 255, 255, 0.95) !important; }
+[data-theme="light"] [class*="bg-slate-800/"] { background-color: rgba(232, 238, 246, 0.82) !important; }
+[data-theme="light"] [class*="bg-white/5"] { background-color: #ffffff !important; }
+[data-theme="light"] [class*="bg-white/10"] { background-color: #ffffff !important; }
+
+/* 边框 */
+[data-theme="light"] [class*="border-slate-800"],
+[data-theme="light"] [class*="border-slate-700"] {
+  border-color: #cbd5e1 !important;
+}
+
+/* ============================================ */
+/* 文字颜色：深色优先（比之前对比度更高）       */
+/* ============================================ */
+[data-theme="light"] {
+  color: #0f172a;
+}
+
+[data-theme="light"] .text-white,
+[data-theme="light"] [class*="text-white"] {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] [class*="text-slate-100"],
+[data-theme="light"] [class*="text-slate-200"],
+[data-theme="light"] [class*="text-slate-300"] {
+  color: #1e293b !important;
+}
+
+[data-theme="light"] [class*="text-slate-400"] {
+  color: #334155 !important;
+}
+
+[data-theme="light"] [class*="text-slate-500"] {
+  color: #475569 !important;
+}
+
+[data-theme="light"] [class*="text-slate-600"] {
+  color: #64748b !important;
+}
+
+[data-theme="light"] [class*="text-slate-700"] {
+  color: #334155 !important;
+}
+
+/* ============================================ */
+/* 彩色文字：日间模式下加深，提升可读性         */
+/* ============================================ */
+[data-theme="light"] [class*="text-purple-300"],
+[data-theme="light"] [class*="text-purple-400"] {
+  color: #7c3aed !important;
+}
+[data-theme="light"] [class*="text-blue-300"],
+[data-theme="light"] [class*="text-blue-400"] {
+  color: #2563eb !important;
+}
+[data-theme="light"] [class*="text-emerald-300"],
+[data-theme="light"] [class*="text-emerald-400"] {
+  color: #059669 !important;
+}
+[data-theme="light"] [class*="text-amber-300"],
+[data-theme="light"] [class*="text-amber-400"] {
+  color: #b45309 !important;
+}
+[data-theme="light"] [class*="text-red-300"],
+[data-theme="light"] [class*="text-red-400"] {
+  color: #dc2626 !important;
+}
+[data-theme="light"] [class*="text-rose-300"],
+[data-theme="light"] [class*="text-rose-400"] {
+  color: #e11d48 !important;
+}
+[data-theme="light"] [class*="text-cyan-300"],
+[data-theme="light"] [class*="text-cyan-400"] {
+  color: #0891b2 !important;
+}
+[data-theme="light"] [class*="text-yellow-400"] {
+  color: #ca8a04 !important;
+}
+[data-theme="light"] [class*="text-indigo-300"],
+[data-theme="light"] [class*="text-indigo-400"] {
+  color: #4f46e5 !important;
+}
+[data-theme="light"] [class*="text-fuchsia-300"],
+[data-theme="light"] [class*="text-fuchsia-400"] {
+  color: #c026d3 !important;
+}
+
+/* ============================================ */
+/* 输入框                                       */
+/* ============================================ */
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+[data-theme="light"] input::placeholder,
+[data-theme="light"] textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+[data-theme="light"] button {
+  color: #1e293b;
+}
+
+/* ============================================ */
+/* 主按钮：保持鲜亮，文字白色                   */
+/* ============================================ */
+[data-theme="light"] [class~="bg-blue-600"],
+[data-theme="light"] [class~="bg-blue-500"],
+[data-theme="light"] [class~="bg-purple-600"],
+[data-theme="light"] [class~="bg-purple-500"],
+[data-theme="light"] [class~="bg-red-500"],
+[data-theme="light"] [class~="bg-red-600"],
+[data-theme="light"] [class~="bg-emerald-600"] {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] [class~="bg-blue-600"] *,
+[data-theme="light"] [class~="bg-blue-500"] *,
+[data-theme="light"] [class~="bg-purple-600"] *,
+[data-theme="light"] [class~="bg-purple-500"] *,
+[data-theme="light"] [class~="bg-red-500"] *,
+[data-theme="light"] [class~="bg-red-600"] *,
+[data-theme="light"] [class~="bg-emerald-600"] * {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] [class~="bg-fuchsia-500"],
+[data-theme="light"] [class~="bg-fuchsia-600"] {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] [class~="bg-fuchsia-500"] *,
+[data-theme="light"] [class~="bg-fuchsia-600"] * {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] [class~="bg-indigo-500"],
+[data-theme="light"] [class~="bg-indigo-600"] {
+  color: #ffffff !important;
+}
+
+[data-theme="light"] [class~="bg-indigo-500"] *,
+[data-theme="light"] [class~="bg-indigo-600"] * {
+  color: #ffffff !important;
+}
+
+/* ============================================ */
+/* 半透明彩色 chip：日间下加白底，让文字看清    */
+/* ============================================ */
+[data-theme="light"] [class*="bg-purple-500/10"],
+[data-theme="light"] [class*="bg-purple-500/15"],
+[data-theme="light"] [class*="bg-purple-500/20"],
+[data-theme="light"] [class*="bg-purple-600/10"],
+[data-theme="light"] [class*="bg-purple-600/15"],
+[data-theme="light"] [class*="bg-purple-600/20"] {
+  background-color: #ede9fe !important;
+}
+
+[data-theme="light"] [class*="bg-blue-500/10"],
+[data-theme="light"] [class*="bg-blue-500/15"],
+[data-theme="light"] [class*="bg-blue-500/20"],
+[data-theme="light"] [class*="bg-blue-600/10"],
+[data-theme="light"] [class*="bg-blue-600/15"],
+[data-theme="light"] [class*="bg-blue-600/20"] {
+  background-color: #dbeafe !important;
+}
+
+[data-theme="light"] [class*="bg-emerald-500/10"],
+[data-theme="light"] [class*="bg-emerald-500/15"],
+[data-theme="light"] [class*="bg-emerald-500/20"] {
+  background-color: #d1fae5 !important;
+}
+
+[data-theme="light"] [class*="bg-amber-500/10"],
+[data-theme="light"] [class*="bg-amber-500/15"],
+[data-theme="light"] [class*="bg-amber-500/20"] {
+  background-color: #fef3c7 !important;
+}
+
+[data-theme="light"] [class*="bg-red-500/10"],
+[data-theme="light"] [class*="bg-red-500/15"],
+[data-theme="light"] [class*="bg-red-500/20"] {
+  background-color: #fee2e2 !important;
+}
+
+[data-theme="light"] [class*="bg-rose-500/10"] {
+  background-color: #ffe4e6 !important;
+}
+
+[data-theme="light"] [class*="bg-indigo-500/10"],
+[data-theme="light"] [class*="bg-indigo-500/15"],
+[data-theme="light"] [class*="bg-indigo-500/20"],
+[data-theme="light"] [class*="bg-indigo-600/10"],
+[data-theme="light"] [class*="bg-indigo-600/15"],
+[data-theme="light"] [class*="bg-indigo-600/20"],
+[data-theme="light"] [class*="bg-indigo-600/30"] {
+  background-color: #e0e7ff !important;
+}
+
+[data-theme="light"] [class*="bg-fuchsia-500/10"],
+[data-theme="light"] [class*="bg-fuchsia-500/15"],
+[data-theme="light"] [class*="bg-fuchsia-500/20"],
+[data-theme="light"] [class*="bg-fuchsia-600/10"],
+[data-theme="light"] [class*="bg-fuchsia-600/15"],
+[data-theme="light"] [class*="bg-fuchsia-600/20"] {
+  background-color: #fae8ff !important;
+}
+
+[data-theme="light"] .editor-container {
+  background-color: #ffffff;
+}
+
+/* ============================================ */
+/* TipTap 正文区域                              */
+/* ============================================ */
+[data-theme="light"] .prose-invert,
+[data-theme="light"] .prose-invert * {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .prose-invert h1,
+[data-theme="light"] .prose-invert h2,
+[data-theme="light"] .prose-invert h3,
+[data-theme="light"] .prose-invert strong {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .ProseMirror {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] pre {
+  color: #1e293b !important;
+}
+
+/* ============================================ */
+/* 代码块和高亮（日间也能看清）                 */
+/* ============================================ */
+[data-theme="light"] code {
+  background-color: #f1f5f9 !important;
+  color: #be185d !important;
+}
+
+/* ============================================ */
+/* 阴影优化                                     */
+/* ============================================ */
+[data-theme="light"] .shadow-2xl {
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.14) !important;
+}
+
+[data-theme="light"] .shadow-lg {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1) !important;
+}
+
+/* ============================================ */
+/* 渐变背景修复（避免日间下出现深色块）         */
+/* ============================================ */
+[data-theme="light"] [class*="from-slate-950"],
+[data-theme="light"] [class*="to-slate-950"],
+[data-theme="light"] [class*="via-slate-950"] {
+  --tw-gradient-from: #f8fafc !important;
+  --tw-gradient-to: #f8fafc !important;
+  --tw-gradient-via: #f8fafc !important;
+}
+
+[data-theme="light"] [class*="from-slate-900"],
+[data-theme="light"] [class*="to-slate-900"],
+[data-theme="light"] [class*="via-slate-900"] {
+  --tw-gradient-from: #ffffff !important;
+  --tw-gradient-to: #ffffff !important;
+  --tw-gradient-via: #ffffff !important;
+}
+
+/* hover 状态适配 */
+[data-theme="light"] [class*="hover:bg-slate-800"]:hover {
+  background-color: #cbd5e1 !important;
+}
+[data-theme="light"] [class*="hover:bg-slate-700"]:hover {
+  background-color: #94a3b8 !important;
+}
+
+/* ============================================ */
+/* 打字机模式：当前段落聚焦，其他段落淡出       */
+/* ============================================ */
+.editor-container[data-typewriter="on"] .ProseMirror > * {
+  transition: opacity 0.25s ease, filter 0.25s ease;
+  opacity: 0.32;
+  filter: blur(0.2px);
+}
+.editor-container[data-typewriter="on"] .ProseMirror > .typewriter-focus {
+  opacity: 1;
+  filter: none;
+}
+.editor-container[data-typewriter="on"] .ProseMirror {
+  padding-top: 35vh;
+  padding-bottom: 45vh;
+}

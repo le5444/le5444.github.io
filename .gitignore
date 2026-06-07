@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+dist-pwa/
+build/
+
+# Desktop packaging output
+desktop-build/
+desktop-release/
+
+# Python and Rust build caches
+__pycache__/
+*.py[cod]
+target/
+
+# Local runtime state and generated records
+bridge/approvals/
+bridge/goals/
+bridge/healthcheck-write/
+bridge/kairos/
+bridge/memory/
+bridge/research/
+bridge/runs/
+bridge/scheduler/
+bridge/skills/
+bridge/subagents/
+bridge/user-model/
+bridge/workers/
+bridge/workflows/
+bridge/*-test.out
+bridge/*-test.err
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Personal conversation context
+对话记忆-织梦PersonalOS.md
+继续上下文-织梦PersonalOS.md
