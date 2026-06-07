@@ -2246,15 +2246,16 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
         status = str(decision.get("status") or result.get("status") or "pending")
         by_action[action] = by_action.get(action, 0) + 1
         by_status[status] = by_status.get(status, 0) + 1
+        message = str(decision.get("message") or decision.get("reason") or result.get("message") or "")
         summaries.append({
             "id": record.get("id"),
             "created_at": record.get("created_at"),
             "action": action,
             "status": status,
             "approval_required": bool(result.get("approval_required", True)),
-            "message": str(result.get("message") or ""),
+            "message": message,
             "purpose": str(request.get("purpose") or result.get("purpose") or ""),
-            "target": str(result.get("target") or as_record(result.get("memory_management")).get("target_id") or ""),
+            "target": str(decision.get("target") or result.get("target") or as_record(result.get("memory_management")).get("target_id") or ""),
             "proposal": result.get("memory_management") if isinstance(result.get("memory_management"), dict) else result.get("write_file"),
             "decision": decision,
         })
@@ -7844,7 +7845,13 @@ def handle_request(
             "message": "Approval queue inspected without approving or executing records.",
         })
     elif action == "approval_decide":
-        result.update(approval_decide(payload, execute_write=execute_write, full_access_files=full_access_files))
+        decision_result = approval_decide(payload, execute_write=execute_write, full_access_files=full_access_files)
+        result.update({
+            "approval_required": bool(decision_result.get("approval_required", False)),
+            "status": str(decision_result.get("status") or "ok"),
+            "approval_decide": decision_result,
+            "message": str(decision_result.get("message") or "Approval decision recorded."),
+        })
     elif action in MEMORY_MANAGEMENT_ACTIONS:
         proposal = memory_management_proposal(action, payload, purpose)
         result.update({
