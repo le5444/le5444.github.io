@@ -88,6 +88,16 @@ interface ProviderActionSnapshot {
   at: number;
 }
 
+interface ApprovalDecisionSnapshot {
+  approvalId: string;
+  decision: "reject" | "execute" | "";
+  status: string;
+  detail: string;
+  at: number;
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+}
+
 interface TerminalCommandSnapshot {
   command: string;
   status: string;
@@ -205,7 +215,7 @@ type BottomPanelTab = "terminal" | "output" | "problems" | "workers" | "gateway"
 type RuntimeLogChannel = "terminal" | "output" | "problems" | "workers" | "gateway" | "approvals";
 type RuntimeLogStatusFilter = "all" | "issues" | "active";
 type RuntimeLogExportFormat = "jsonl" | "markdown";
-type ApprovalDetailTab = "proposal" | "request" | "result";
+type ApprovalDetailTab = "proposal" | "request" | "result" | "decision";
 type AgentThreadScope = "current_workspace" | "all_workspaces" | "unbound";
 type AgentThreadContextKind = "workspace" | "file" | "memory" | "skill" | "context_pack" | "approval" | "worker";
 type AgentThreadEventKind = "system" | "draft" | "worker" | "approval" | "diff" | "write" | "note";
@@ -1314,7 +1324,7 @@ async function captureJson(label: string, request: Promise<JsonRecord>): Promise
   }
 }
 
-function bridgeAction(action: string, payload: JsonRecord = {}) {
+function bridgeAction(action: string, payload: JsonRecord = {}, options: { execute?: boolean } = {}) {
   return fetchJson(`${GATEWAY_ORIGIN}/bridge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1322,13 +1332,14 @@ function bridgeAction(action: string, payload: JsonRecord = {}) {
       action,
       purpose: `Agent Control Center ${action}`,
       payload,
+      ...(options.execute ? { execute: true } : {}),
     }),
   });
 }
 
 function statusTone(status: string) {
   const normalized = status.toLowerCase();
-  if (["ok", "pass", "completed", "running", "ready", "accepted", "proposal"].includes(normalized)) return "text-emerald-300";
+  if (["ok", "pass", "completed", "executed", "running", "ready", "accepted", "proposal"].includes(normalized)) return "text-emerald-300";
   if (["partial", "pending", "queued", "draft", "approval_required", "modified"].includes(normalized)) return "text-amber-300";
   if (["missing", "blocked", "failed", "error", "rejected"].includes(normalized)) return "text-red-300";
   return "text-slate-300";
@@ -1346,6 +1357,7 @@ function statusLabel(status: string) {
     draft: "草案",
     enabled: "已启用",
     error: "错误",
+    executed: "已执行",
     failed: "失败",
     gated: "受控",
     disabled: "禁用",
@@ -1731,6 +1743,15 @@ export function AgentControlCenter({
   const [approvalStatusFilter, setApprovalStatusFilter] = useState("all");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
   const [approvalDetailTab, setApprovalDetailTab] = useState<ApprovalDetailTab>("proposal");
+  const [approvalDecision, setApprovalDecision] = useState<ApprovalDecisionSnapshot>({
+    approvalId: "",
+    decision: "",
+    status: "",
+    detail: "",
+    at: 0,
+    request: null,
+    result: null,
+  });
   const acceptedCommandHunkContent = useMemo(() => buildAcceptedHunkContent(commandDiffHunks), [commandDiffHunks]);
   const acceptedCommandHunkCount = useMemo(() => commandDiffHunks.filter((hunk) => hunk.status === "accepted").length, [commandDiffHunks]);
   const rejectedCommandHunkCount = useMemo(() => commandDiffHunks.filter((hunk) => hunk.status === "rejected").length, [commandDiffHunks]);
@@ -2480,11 +2501,31 @@ export function AgentControlCenter({
   const selectedApprovalRequest = asRecord(selectedApprovalRecord?.request);
   const selectedApprovalResult = asRecord(selectedApprovalRecord?.result);
   const selectedApprovalProposal = asRecord(selectedApprovalSummary?.proposal);
+  const selectedApprovalStatus = asString(selectedApprovalSummary?.status, "pending");
+  const selectedApprovalAction = asString(selectedApprovalSummary?.action, "unknown");
+  const selectedApprovalIdValue = asString(selectedApprovalSummary?.id);
+  const localApprovalDecisionResult = approvalDecision.approvalId === selectedApprovalIdValue
+    ? asRecord(asRecord(approvalDecision.result?.approval_decide).decision ?? approvalDecision.result?.approval_decide)
+    : {};
+  const selectedApprovalDecision = Object.keys(asRecord(selectedApprovalRecord?.decision ?? selectedApprovalSummary?.decision)).length
+    ? asRecord(selectedApprovalRecord?.decision ?? selectedApprovalSummary?.decision)
+    : localApprovalDecisionResult;
   const selectedApprovalDetail = approvalDetailTab === "request"
     ? selectedApprovalRequest
     : approvalDetailTab === "result"
       ? selectedApprovalResult
-      : selectedApprovalProposal;
+      : approvalDetailTab === "decision"
+        ? selectedApprovalDecision
+        : selectedApprovalProposal;
+  const selectedApprovalIsTerminal = ["executed", "rejected", "already_decided"].includes(selectedApprovalStatus);
+  const selectedApprovalCanReject = Boolean(state.online && selectedApprovalIdValue && !selectedApprovalIsTerminal && approvalDecision.status !== "running");
+  const selectedApprovalCanExecuteWrite = Boolean(
+    state.online
+      && selectedApprovalIdValue
+      && selectedApprovalAction === "write_file"
+      && !selectedApprovalIsTerminal
+      && approvalDecision.status !== "running",
+  );
   const activeThreadApprovalIdSet = new Set(activeThread?.approvalIds || []);
   const activeThreadApprovalSnapshotMap = new Map((activeThread?.approvalSnapshots || []).map((item) => [item.id, item]));
   const approvalSummaryById = new Map(approvalSummaries.map((item) => [asString(item.id), item]));
@@ -2568,6 +2609,96 @@ export function AgentControlCenter({
       detail: `${approvalId} · ${activeThread.title}`,
       status: "linked",
     });
+  };
+
+  const decideSelectedApproval = async (decision: "reject" | "execute") => {
+    const approval = selectedApprovalSummary;
+    const approvalId = asString(approval?.id);
+    const action = asString(approval?.action, "unknown");
+    if (!state.online || !approvalId) return;
+    if (decision === "execute" && action !== "write_file") return;
+    const request = {
+      approval_id: approvalId,
+      decision,
+      reason: decision === "reject"
+        ? `用户在审批复核台拒绝 ${action} 审批。`
+        : `用户在审批复核台执行已排队的 write_file 审批。`,
+    };
+    const startedAt = Date.now();
+    setApprovalDecision({
+      approvalId,
+      decision,
+      status: "running",
+      detail: decision === "reject" ? "正在记录拒绝决策..." : "正在请求 Gateway 执行 write_file 审批...",
+      at: startedAt,
+      request,
+      result: null,
+    });
+    try {
+      const result = await bridgeAction("approval_decide", request, { execute: decision === "execute" });
+      const decisionResult = asRecord(result.approval_decide);
+      const rawStatus = asString(decisionResult.status, asString(result.status, "unknown"));
+      const detail = asString(decisionResult.message, asString(result.message, "审批决策已记录。"));
+      setApprovalDecision({
+        approvalId,
+        decision,
+        status: rawStatus,
+        detail,
+        at: Date.now(),
+        request,
+        result,
+      });
+      const attachment = createAgentThreadContextAttachment({
+        kind: "approval",
+        title: `审批 ${compactApprovalId(approvalId)}`,
+        detail: `${decision === "reject" ? "拒绝" : "执行 write_file"} · ${action} · ${detail}`,
+        ref: approvalId,
+        source: "approval_decide",
+        status: rawStatus,
+        at: Date.now(),
+      });
+      appendRuntimeLog({
+        channel: "approvals",
+        title: decision === "reject" ? "审批已拒绝" : "write_file 审批执行结果",
+        detail: `${approvalId} · ${detail}`,
+        status: rawStatus,
+      });
+      appendAgentThreadEvent({
+        kind: "approval",
+        title: decision === "reject" ? "拒绝审批" : "执行 write_file 审批",
+        detail: `${approvalId} · ${detail}`,
+        status: rawStatus,
+        approvalId,
+        contextAttachments: [attachment],
+      });
+      setApprovalDetailTab("decision");
+      setBottomPanelTab("approvals");
+      void refresh();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "审批决策提交失败";
+      setApprovalDecision({
+        approvalId,
+        decision,
+        status: "error",
+        detail,
+        at: Date.now(),
+        request,
+        result: null,
+      });
+      appendRuntimeLog({
+        channel: "approvals",
+        title: "审批决策失败",
+        detail: `${approvalId} · ${detail}`,
+        status: "error",
+      });
+      appendAgentThreadEvent({
+        kind: "approval",
+        title: "审批决策失败",
+        detail: `${approvalId} · ${detail}`,
+        status: "error",
+        approvalId,
+      });
+    }
   };
   const phasePayload = asRecord(state.phase?.phase_audit ?? state.phase?.audit ?? state.phase);
   const completionPayload = asRecord(state.completion?.completion_audit ?? state.completion?.audit ?? state.completion);
@@ -5504,11 +5635,38 @@ export function AgentControlCenter({
                       disabled={!activeThread || !selectedApprovalSummary || selectedApprovalLinkedToActiveThread}
                     />
                   </div>
+                  <div className="grid gap-2 rounded border border-slate-800 bg-slate-950 px-2 py-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                    <div className="min-w-0 text-[10px] leading-relaxed text-slate-500">
+                      执行门：{selectedApprovalAction === "write_file" ? "write_file 可请求执行" : "非 write_file 只允许拒绝或继续复核"} · {selectedApprovalIsTerminal ? "已终态" : state.online ? "Gateway 在线" : "Gateway 离线"}
+                    </div>
+                    <ActionButton
+                      label={approvalDecision.status === "running" && approvalDecision.decision === "reject" ? "拒绝中" : "拒绝审批"}
+                      icon={<XCircle className="h-3.5 w-3.5" />}
+                      onClick={() => void decideSelectedApproval("reject")}
+                      disabled={!selectedApprovalCanReject}
+                    />
+                    <ActionButton
+                      label={approvalDecision.status === "running" && approvalDecision.decision === "execute" ? "执行中" : "执行 write_file"}
+                      icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+                      onClick={() => void decideSelectedApproval("execute")}
+                      disabled={!selectedApprovalCanExecuteWrite}
+                    />
+                  </div>
                   <div className="rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
                     {asString(selectedApprovalSummary.message, "等待人工复核。")}
                   </div>
+                  {approvalDecision.approvalId === selectedApprovalIdValue && approvalDecision.status && (
+                    <div
+                      data-testid="approval-decision-result"
+                      className="rounded border border-cyan-500/20 bg-cyan-500/5 px-2 py-2 text-[10px] leading-relaxed text-slate-400"
+                    >
+                      <span className={statusTone(approvalDecision.status)}>{statusLabel(approvalDecision.status)}</span>
+                      <span className="mx-1 text-slate-600">·</span>
+                      {approvalDecision.detail}
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-1">
-                    {(["proposal", "request", "result"] as ApprovalDetailTab[]).map((tabId) => (
+                    {(["proposal", "request", "result", "decision"] as ApprovalDetailTab[]).map((tabId) => (
                       <button
                         key={tabId}
                         type="button"
@@ -5519,7 +5677,7 @@ export function AgentControlCenter({
                             : "border-slate-800 bg-slate-950 text-slate-500 hover:border-cyan-500/40 hover:text-slate-200"
                         }`}
                       >
-                        {tabId === "proposal" ? "Proposal 草案" : tabId === "request" ? "Request 请求" : "Result 结果"}
+                        {tabId === "proposal" ? "Proposal 草案" : tabId === "request" ? "Request 请求" : tabId === "result" ? "Result 结果" : "Decision 决策"}
                       </button>
                     ))}
                   </div>
@@ -5534,7 +5692,7 @@ export function AgentControlCenter({
                     <EmptyBlock text={`${approvalDetailTab} 暂无结构化数据；可切到 Request 或 Result 查看原始记录。`} />
                   )}
                   <div className="rounded border border-amber-500/20 bg-amber-500/5 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
-                    复核台当前只读：不会修改文件、不会改记忆、不会调用远程模型，也不会安装计划任务。
+                    复核台只执行两类决策：拒绝审批，或在 Gateway 执行门开启时执行已排队的 write_file。
                   </div>
                 </div>
               ) : <EmptyBlock text="选择一条审批记录后查看详情" />}
