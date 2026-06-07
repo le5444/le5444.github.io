@@ -1322,7 +1322,7 @@ def safety_review(action: str, purpose: str, payload: Dict[str, Any]) -> List[Di
         "External URL/source appears in payload; provenance review required." if re.search(r"https?:\/\/", source_text, flags=re.IGNORECASE) else "No external source detected.",
     ))
 
-    approval_actions = {"write_file", "run_command", "web_fetch", "mcp_call", "provider_probe", "scheduler_install", "scheduler_uninstall", "skill_run"} | MEMORY_MANAGEMENT_ACTIONS
+    approval_actions = {"write_file", "approval_decide", "run_command", "web_fetch", "mcp_call", "provider_probe", "scheduler_install", "scheduler_uninstall", "skill_run"} | MEMORY_MANAGEMENT_ACTIONS
     review.append(safety_item(
         "permission",
         "block" if command_blocked else "warn" if action in approval_actions else "pass",
@@ -1342,7 +1342,7 @@ def safety_review(action: str, purpose: str, payload: Dict[str, Any]) -> List[Di
         "Execute flag requested; read_file/write_file/run_command/web_fetch/mcp_call/provider_probe/skill_run still require the matching Gateway execution flag or explicit remote gate." if bool(payload.get("execute")) else "Default dry-run/non-executing mode.",
     ))
 
-    writeback_actions = {"run", "advance", "kairos_task", "kairos_tick", "memory_event", "memory_bootstrap", "memory_consolidate", "source_digest", "goal_bootstrap", "skill_bootstrap", "skill_crystallize", "user_model_event", "user_model_reflect", "subagent_spawn", "lock_acquire", "lock_release", "swarm_bootstrap", "evolution_bootstrap", "write_file", "scheduler_install", "scheduler_uninstall", "skill_run", "worker_merge_proposal"} | MEMORY_MANAGEMENT_ACTIONS
+    writeback_actions = {"run", "advance", "kairos_task", "kairos_tick", "memory_event", "memory_bootstrap", "memory_consolidate", "source_digest", "goal_bootstrap", "skill_bootstrap", "skill_crystallize", "user_model_event", "user_model_reflect", "subagent_spawn", "lock_acquire", "lock_release", "swarm_bootstrap", "evolution_bootstrap", "write_file", "approval_decide", "scheduler_install", "scheduler_uninstall", "skill_run", "worker_merge_proposal"} | MEMORY_MANAGEMENT_ACTIONS
     review.append(safety_item(
         "writeback",
         "pass" if action in writeback_actions else "warn" if action in {"run_command", "web_fetch", "mcp_call", "provider_probe"} else "pass",
@@ -1362,6 +1362,7 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             {"action": "search", "mode": "read", "description": "Search readable project text files."},
             {"action": "status", "mode": "read", "description": "Inspect bridge health, recent runs, and workflow state."},
             {"action": "approval_status", "mode": "read", "description": "Inspect recent approval queue records without executing them."},
+            {"action": "approval_decide", "mode": "approval-executor", "description": "Reject a queued approval or execute a queued write_file approval only when execute-write is enabled."},
             {"action": "advance", "mode": "stateful", "description": "Advance a registered workflow DAG node."},
             {"action": "run", "mode": "stateful", "description": "Register or update a workflow DAG run."},
             {"action": "memory_event", "mode": "stateful", "description": "Append an AutoDream L1 memory event."},
@@ -1454,6 +1455,19 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
             "name": "approval_status",
             "description": "Inspect recent approval queue records without approving or executing them.",
             "inputSchema": {"type": "object", "properties": {"limit": {"type": "number"}, "action": {"type": "string"}}},
+        },
+        {
+            "name": "approval_decide",
+            "description": "Reject a queued approval or execute a queued write_file approval when Gateway execute-write is enabled.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "approval_id": {"type": "string"},
+                    "decision": {"type": "string", "enum": ["reject", "execute"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["approval_id", "decision"],
+            },
         },
         {
             "name": "run",
@@ -2179,6 +2193,24 @@ def save_record(folder: str, req: Dict[str, Any], result: Dict[str, Any]) -> str
     return record_id
 
 
+def approval_record_path(approval_id: str) -> Path:
+    clean_id = str(approval_id or "").strip()
+    if not clean_id or not re.fullmatch(r"[0-9a-fA-F-]{16,80}", clean_id):
+        raise ValueError("approval_id is required")
+    matches = sorted(bridge_dir("approvals").glob(f"*-{clean_id}.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+    if not matches:
+        raise FileNotFoundError(f"approval not found: {clean_id}")
+    return matches[0]
+
+
+def load_approval_record(approval_id: str) -> Dict[str, Any]:
+    return json.loads(approval_record_path(approval_id).read_text(encoding="utf-8"))
+
+
+def save_approval_record(approval_id: str, record: Dict[str, Any]) -> None:
+    approval_record_path(approval_id).write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def recent_records(folder: str, limit: int = 20) -> List[Dict[str, Any]]:
     paths = sorted(bridge_dir(folder).glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]
     records = []
@@ -2209,8 +2241,9 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
     for record in records:
         request = as_record(record.get("request"))
         result = as_record(record.get("result"))
+        decision = as_record(record.get("decision"))
         action = str(request.get("action") or result.get("action") or "unknown")
-        status = str(result.get("status") or "pending")
+        status = str(decision.get("status") or result.get("status") or "pending")
         by_action[action] = by_action.get(action, 0) + 1
         by_status[status] = by_status.get(status, 0) + 1
         summaries.append({
@@ -2223,6 +2256,7 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
             "purpose": str(request.get("purpose") or result.get("purpose") or ""),
             "target": str(result.get("target") or as_record(result.get("memory_management")).get("target_id") or ""),
             "proposal": result.get("memory_management") if isinstance(result.get("memory_management"), dict) else result.get("write_file"),
+            "decision": decision,
         })
     return {
         "count": len(records),
@@ -2230,6 +2264,96 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
         "summaries": summaries,
         "by_action": by_action,
         "by_status": by_status,
+    }
+
+
+def approval_decide(
+    payload: Dict[str, Any],
+    execute_write: bool = False,
+    full_access_files: bool = False,
+) -> Dict[str, Any]:
+    approval_id = str(payload.get("approval_id") or payload.get("id") or "").strip()
+    decision = str(payload.get("decision") or payload.get("status") or "").strip().lower()
+    if decision not in {"reject", "execute"}:
+        raise ValueError("decision must be reject or execute")
+    reason = str(payload.get("reason") or "").strip()
+    record = load_approval_record(approval_id)
+    request = as_record(record.get("request"))
+    original_result = as_record(record.get("result"))
+    action = str(request.get("action") or original_result.get("action") or "").strip()
+    existing_decision = as_record(record.get("decision"))
+    if existing_decision.get("status") in {"executed", "rejected"}:
+        return {
+            "status": "already_decided",
+            "approval_id": approval_id,
+            "decision": existing_decision,
+            "message": f"approval already {existing_decision.get('status')}",
+        }
+    if decision == "reject":
+        decision_record = {
+            "status": "rejected",
+            "decision": "reject",
+            "reason": reason,
+            "decided_at": now_iso(),
+            "action": action,
+        }
+        record["decision"] = decision_record
+        save_approval_record(approval_id, record)
+        return {
+            "status": "rejected",
+            "approval_id": approval_id,
+            "decision": decision_record,
+            "message": "Approval rejected; no action executed.",
+        }
+    if action != "write_file":
+        decision_record = {
+            "status": "blocked",
+            "decision": "execute",
+            "reason": reason,
+            "decided_at": now_iso(),
+            "action": action,
+            "message": "approval_decide currently only executes queued write_file approvals.",
+        }
+        record["decision"] = decision_record
+        save_approval_record(approval_id, record)
+        return {
+            "status": "blocked",
+            "approval_required": True,
+            "approval_id": approval_id,
+            "decision": decision_record,
+            "message": "Only write_file approvals can be executed by approval_decide v1.",
+        }
+    if not execute_write:
+        return {
+            "status": "approval_required",
+            "approval_required": True,
+            "approval_id": approval_id,
+            "message": "Executing an approval requires Gateway --execute-write.",
+        }
+    queued_payload = as_record(request.get("payload")).copy()
+    queued_payload["execute"] = True
+    access_profile = normalize_file_access_profile(queued_payload)
+    target = resolve_file_path(str(queued_payload.get("path") or ""), access_profile, full_access_files=full_access_files)
+    write_result = write_text_file(queued_payload, target)
+    decision_record = {
+        "status": "executed",
+        "decision": "execute",
+        "reason": reason,
+        "decided_at": now_iso(),
+        "action": action,
+        "target": str(target),
+        "write_file": write_result,
+    }
+    record["decision"] = decision_record
+    record["execution_result"] = write_result
+    save_approval_record(approval_id, record)
+    return {
+        "status": "ok",
+        "approval_required": False,
+        "approval_id": approval_id,
+        "decision": decision_record,
+        "write_file": write_result,
+        "message": "Approval executed with write_file backup/diff audit.",
     }
 
 
@@ -7719,6 +7843,8 @@ def handle_request(
             "approval_status": approval_status(payload),
             "message": "Approval queue inspected without approving or executing records.",
         })
+    elif action == "approval_decide":
+        result.update(approval_decide(payload, execute_write=execute_write, full_access_files=full_access_files))
     elif action in MEMORY_MANAGEMENT_ACTIONS:
         proposal = memory_management_proposal(action, payload, purpose)
         result.update({
