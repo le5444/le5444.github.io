@@ -1752,11 +1752,6 @@ export function AgentControlCenter({
       || agentThreads[0]
       || null;
   }, [activeWorkspace?.book.id, agentThreads, activeThreadId, workbenchLayout.agentThreadScope]);
-  const threadScopeLabel = workbenchLayout.agentThreadScope === "all_workspaces"
-    ? "全部空间"
-    : workbenchLayout.agentThreadScope === "unbound"
-      ? "未绑定"
-      : activeWorkspace?.title || "当前工作区";
   const filteredAgentThreads = useMemo(() => {
     const normalizedSearch = workbenchLayout.agentThreadSearch.trim().toLowerCase();
     return agentThreads
@@ -4197,6 +4192,140 @@ export function AgentControlCenter({
     `- 工具: ${enabledTools.length} 已开 / ${gatedTools.length} 受控`,
     "- 下一步: 执行前先审查审批队列",
   ].join("\n");
+  const specWorkflowRows = [
+    {
+      phase: "Requirements",
+      label: "需求",
+      status: activeThread?.task || commandTask.trim() ? "draft" : "pending",
+      detail: activeThread?.task || commandTask.trim() || "先在线程或命令中心写下目标，形成可审查需求。",
+      output: "requirements.md",
+    },
+    {
+      phase: "Design",
+      label: "设计",
+      status: commandDraft.contextItems.length || activeThread?.contextAttachments.length ? "ready" : "pending",
+      detail: "把工作区文件、thread_context、记忆和 Skills 收进 context_pack，生成实现边界。",
+      output: "design.md",
+    },
+    {
+      phase: "Tasks",
+      label: "任务",
+      status: commandApproval.planItems.length ? commandApproval.status || "draft" : "pending",
+      detail: commandApproval.planItems.length
+        ? `${commandApproval.planItems.length} 个计划步骤等待接受 / 拒绝 / 修改。`
+        : "等待只读 Worker 或计划审批生成可执行步骤。",
+      output: "tasks.md",
+    },
+    {
+      phase: "Review",
+      label: "复核",
+      status: approvalQueueCount || commandDiffHunks.length || workerMergeProposals.length ? "review" : "idle",
+      detail: `审批 ${approvalQueueCount} · Diff ${commandDiffHunks.length || workerMergeProposals.length} · 问题 ${completionPartial + completionMissing}`,
+      output: "approval queue",
+    },
+  ];
+  const steeringRows = [
+    {
+      label: "产品边界",
+      status: "locked",
+      detail: "灵枢 LumenOS 是 Personal Agent OS；织梦只是可挂载的写作领域 Agent。",
+      path: ".lumen/steering/product.md",
+    },
+    {
+      label: "Workbench 布局",
+      status: "active",
+      detail: "Header / Activity Bar / 主侧边栏 / 主工作区 / 辅助侧边栏 / 底部 Panel / 状态栏。",
+      path: ".lumen/steering/workbench.md",
+    },
+    {
+      label: "上下文策略",
+      status: "active",
+      detail: "优先 context_pack、thread_context、L1/L2 摘要和必要全文，避免全量塞 prompt。",
+      path: ".lumen/steering/context.md",
+    },
+    {
+      label: "安全规则",
+      status: completionMissing ? "partial" : "active",
+      detail: "写入、联网、MCP、Skill runtime、Scheduler、远程模型全部先进入审批或显式 gate。",
+      path: ".lumen/steering/safety.md",
+    },
+  ];
+  const hookPolicyRows = [
+    {
+      event: "UserPromptSubmit",
+      status: "draft",
+      detail: "提交任务前注入当前线程、工作区、记忆和 Skills 边界，生成 context_pack 草案。",
+    },
+    {
+      event: "PreToolUse",
+      status: "guarded",
+      detail: "写文件、MCP、远程模型、Skill runtime、Scheduler、命令执行先经过 Gateway validators 与 approval queue。",
+    },
+    {
+      event: "PostToolUse",
+      status: runtimeLogs.length ? "recording" : "ready",
+      detail: "工具结果写入线程消息、runtime log、Changes/Diff 或审批复核台，形成可回放轨迹。",
+    },
+    {
+      event: "PermissionRequest",
+      status: approvalQueueCount ? "review" : "idle",
+      detail: "审批只读可见；批准/执行器仍是下一阶段独立显式 gate。",
+    },
+    {
+      event: "SubagentStop",
+      status: workerRecentEvents.length ? "observed" : "planned",
+      detail: "Worker / Subagent 完成后回填事件流、stream preview 和合并草案，不直接改文件。",
+    },
+  ];
+  const subagentRows = [
+    {
+      label: "Coordinator",
+      status: activeThread ? "active" : "idle",
+      detail: "维护主线程、context_pack、审批关系和阶段目标。",
+      tools: "read / plan / approval",
+    },
+    {
+      label: "Coding Agent",
+      status: "planned",
+      detail: "面向代码项目的文件分析、diff proposal、验证命令和回归检查。",
+      tools: "files / diff / terminal",
+    },
+    {
+      label: "Research Agent",
+      status: "planned",
+      detail: "面向资料检索、网页/MCP 摘要、证据链和 source digest。",
+      tools: "web / MCP / memory",
+    },
+    {
+      label: "Writing Agent",
+      status: activeWorkspace ? "mounted" : "available",
+      detail: "复用织梦写作台、小说 Skills、蒸馏和章节上下文，但不定义 OS 外壳。",
+      tools: "Skills / workspace",
+    },
+    {
+      label: "Reviewer",
+      status: approvalQueueCount || commandDiffHunks.length || workerMergeProposals.length ? "needed" : "ready",
+      detail: "审查 Requirements、Design、Tasks、Diff、Approval 和运行日志。",
+      tools: "approval / problems",
+    },
+  ];
+  const mcpGovernanceRows = [
+    {
+      label: "MCP facade",
+      status: asBoolean(capabilities.execute_mcp) ? "enabled" : "approval_required",
+      detail: "当前仍是 Gateway JSON-RPC facade；生产级 streaming/subscription transport 进入后续阶段。",
+    },
+    {
+      label: "Server allow-list",
+      status: "planned",
+      detail: "按工作区 / profile 维护允许的 MCP servers 和 disabled tools，默认 fail-closed。",
+    },
+    {
+      label: "Tool visibility",
+      status: enabledTools.length ? "active" : "gated",
+      detail: `已开 ${enabledTools.length} · 受控 ${gatedTools.length}；危险工具不进入默认选择面。`,
+    },
+  ];
   const agentModelTaskReady = Boolean((threadComposer.trim() || commandTask.trim() || activeThread?.task || "").trim());
   const agentModelWorkerRunning = ["queued", "starting", "running"].includes(agentModelWorker.status);
   const agentModelGateDetail = apiReady
@@ -4525,7 +4654,7 @@ export function AgentControlCenter({
     { label: "工具", meta: `${enabledTools.length} 已开`, icon: <Wrench className="h-4 w-4" />, view: "tools" as const },
     { label: "模型", meta: `${totalProviderPresetCount} 预设`, icon: <Server className="h-4 w-4" />, view: "providers" as const },
     { label: "后台任务", meta: `${workerCount} 个`, icon: <Cpu className="h-4 w-4" />, view: "workers" as const },
-    { label: "自动化", meta: "KAIROS", icon: <Timer className="h-4 w-4" />, view: "automation" as const },
+    { label: "规格 / 钩子", meta: "Specs", icon: <Timer className="h-4 w-4" />, view: "automation" as const },
     { label: "写作 Agent", meta: activeWorkspace?.title || "无工作区", icon: <BookOpen className="h-4 w-4" />, view: "writing" as const },
   ];
   const activityRail = [
@@ -4539,7 +4668,7 @@ export function AgentControlCenter({
   const workbenchTabs = [
     { label: "Agent OS 控制台", view: "agent" as const },
     { label: "工作区", view: "workspaces" as const },
-    { label: "目标模式", view: "automation" as const },
+    { label: "规格 / 钩子", view: "automation" as const },
     { label: "上下文包", view: "memory" as const },
     { label: "工具", view: "tools" as const },
   ];
@@ -6388,9 +6517,9 @@ export function AgentControlCenter({
       {renderSystemMetrics()}
       {renderWorkbenchHeader({
         icon: <Timer className="h-4 w-4" />,
-        eyebrow: "目标模式 / KAIROS",
-        title: "自主任务草案",
-        description: "KAIROS 只做观察、唤醒、计划和记录；外部动作进入可审查草案，安装计划任务和执行工具仍需明确授权。",
+        eyebrow: "规格 / Steering / Hooks",
+        title: "Spec-driven Agent 控制面",
+        description: "把 Kiro 的 Specs / Steering / Hooks 与 Claude Code 的 Skills、Subagents、MCP 权限合到同一个审查面：先需求、再设计、再任务，所有外部动作仍走 Gateway 审批。",
         status: phaseStatus,
         actions: (
           <>
@@ -6399,30 +6528,98 @@ export function AgentControlCenter({
           </>
         ),
       })}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
         <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<ListChecks className="h-4 w-4 text-lime-300" />} title="阶段审计" meta={phaseStatus} />
-          <div className="grid gap-2 md:grid-cols-2">
-            {phaseRows.length ? phaseRows.slice(0, 8).map((phase) => (
-              <div key={asString(phase.id, asString(phase.label))} className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-slate-200">{asString(phase.label, asString(phase.id, "Phase"))}</div>
-                    <div className="mt-1 text-[10px] text-slate-500">{asNumber(phase.passed)} / {asNumber(phase.total)} 项检查</div>
+          <SectionTitle icon={<ListChecks className="h-4 w-4 text-lime-300" />} title="Specs 工作流" meta="需求 / 设计 / 任务 / 复核" />
+          <div className="mt-3 grid gap-3">
+            {specWorkflowRows.map((row, index) => (
+              <div key={row.phase} className="grid grid-cols-[32px_minmax(0,1fr)_auto] items-start gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-3">
+                <span className="flex h-7 w-7 items-center justify-center rounded bg-slate-800 font-mono text-[10px] text-cyan-200">{index + 1}</span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-xs font-semibold text-white">{row.label}</span>
+                    <span className="font-mono text-[10px] text-slate-500">{row.phase}</span>
+                    <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{row.output}</span>
                   </div>
-                  <StatusBadge status={asString(phase.status, "unknown")} />
+                  <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</p>
                 </div>
+                <StatusBadge status={row.status} subtle />
               </div>
-            )) : <EmptyBlock text="等待 phase_audit 返回阶段列表" />}
+            ))}
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+              <SectionTitle icon={<Brain className="h-4 w-4 text-pink-300" />} title="Steering 规则" meta={`${steeringRows.length}`} />
+              <div className="mt-3 grid gap-2">
+                {steeringRows.map((row) => (
+                  <div key={row.path} className="rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[10px] font-medium text-slate-200">{row.label}</span>
+                      <StatusBadge status={row.status} subtle />
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</div>
+                    <PathLine value={row.path} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+              <SectionTitle icon={<Network className="h-4 w-4 text-blue-300" />} title="MCP 治理" meta="facade / allowlist" />
+              <div className="mt-3 grid gap-2">
+                {mcpGovernanceRows.map((row) => (
+                  <div key={row.label} className="rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[10px] font-medium text-slate-200">{row.label}</span>
+                      <StatusBadge status={row.status} subtle />
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<Activity className="h-4 w-4 text-cyan-300" />} title="自主闸门" meta={`P${completionPartial} / M${completionMissing}`} />
-          <div className="grid gap-2 sm:grid-cols-2">
-            <MiniStat label="部分完成" value={`${completionPartial}`} tone={completionPartial ? "text-amber-300" : "text-emerald-300"} />
-            <MiniStat label="缺失项" value={`${completionMissing}`} tone={completionMissing ? "text-amber-300" : "text-emerald-300"} />
-            <MiniStat label="Gateway" value={state.online ? "在线" : "离线"} tone={state.online ? "text-emerald-300" : "text-amber-300"} />
-            <MiniStat label="API" value={isConfigured(settings) ? "就绪" : "待配置"} tone={isConfigured(settings) ? "text-emerald-300" : "text-amber-300"} />
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<Activity className="h-4 w-4 text-cyan-300" />} title="Agent Hooks" meta={`${hookPolicyRows.length} 个事件`} />
+            <div className="mt-3 grid gap-2">
+              {hookPolicyRows.map((row) => (
+                <div key={row.event} className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-mono text-[10px] text-cyan-200">{row.event}</span>
+                    <StatusBadge status={row.status} subtle />
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] leading-relaxed text-slate-500">
+              Hooks 当前是策略视图和审计模型，不会在后台自动执行外部动作；真正执行仍需要对应 Gateway flag 与 payload gate。
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<GitBranch className="h-4 w-4 text-fuchsia-300" />} title="Subagents" meta="角色 / 工具边界" />
+            <div className="mt-3 grid gap-2">
+              {subagentRows.map((row) => (
+                <div key={row.label} className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-slate-200">{row.label}</span>
+                    <StatusBadge status={row.status} subtle />
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-slate-600">{row.tools}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="执行闸门" meta={`P${completionPartial} / M${completionMissing}`} />
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <MiniStat label="审批队列" value={`${approvalQueueCount}`} tone={approvalQueueCount ? "text-amber-300" : "text-emerald-300"} />
+              <MiniStat label="Changes" value={`${commandDiffHunks.length || workerMergeProposals.length}`} tone={commandDiffHunks.length || workerMergeProposals.length ? "text-amber-300" : "text-slate-300"} />
+              <MiniStat label="Gateway" value={state.online ? "在线" : "离线"} tone={state.online ? "text-emerald-300" : "text-amber-300"} />
+              <MiniStat label="API" value={isConfigured(settings) ? "就绪" : "待配置"} tone={isConfigured(settings) ? "text-emerald-300" : "text-amber-300"} />
+            </div>
           </div>
         </div>
       </div>
@@ -6754,7 +6951,7 @@ export function AgentControlCenter({
               {!agentThreadRows.length && <EmptyBlock text="暂无可显示线程；可切到全部空间或清空搜索。" />}
               {filteredAgentThreads.length > agentThreadRows.length && (
                 <div className="rounded border border-slate-800 bg-slate-950/40 px-2 py-2 text-[10px] text-slate-600">
-                  还有 {filteredAgentThreads.length - agentThreadRows.length} 条线程未显示；可继续搜索或切换线程空间。
+                  还有 {filteredAgentThreads.length - agentThreadRows.length} 条线程未显示；可继续搜索或切换线程范围。
                 </div>
               )}
             </div>

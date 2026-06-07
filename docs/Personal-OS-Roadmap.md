@@ -185,10 +185,12 @@
 42. 模型 Worker 流式回复已改为原地更新：线程消息新增 `sourceRef`，同一 `model-worker-stream:<job_id>` 的 chunk 会持续更新同一条“模型 Worker 回复”，最终 completed 输出也回填到这条消息，不再把每批 `model_stream_chunk` 追加成碎片消息；线程导出会保留来源引用，便于审计。
 43. Agent 线程关联审批已接入只读状态同步：线程记录新增 `approvalSnapshots`，刷新 `approval_status` 后会把已关联 approval 的 action/status/target/message 同步进线程快照和上下文附件；关联审批面板优先显示 Gateway 实时状态，最近队列未命中时使用线程快照兜底，仍然不提供批准或执行入口。
 44. 底部 `终端` Panel 已接入 allowlist 命令闭环：新增命令预设、命令输入、`只校验` 和 `执行 allowlist`；执行仍必须满足 Gateway `--execute-command`、payload `execute=true`、validators pass 和 verification allowlist 命中。结果会写入 terminal runtime log 与当前 Agent 线程工具消息，危险命令仍 blocked。
+45. Agent 线程跨工作区 thread spaces 独立存储首版已落地：新增 `lumenos-agent-thread-spaces` v1 索引，按 `workspace:<id>` / `unbound` 分桶保存线程，并从旧 `lumenos-agent-threads` 自动迁移；运行时仍展开为列表兼容现有 UI，侧边栏和线程管理器显示当前线程空间、space 数和各空间线程数，切换当前工作区时优先选择该 workspace 的可见线程。
+46. `规格 / 钩子` 控制面已落地：原“自动化”视图升级为 Kiro / Claude Code 风格的 Spec-driven Agent 面板，展示 Specs 工作流（Requirements / Design / Tasks / Review）、Steering 规则、Agent Hooks、MCP 治理、Subagents 和执行闸门。该面板只做策略、草案和审计展示，不会绕过 Gateway 审批或直接执行外部动作。
 
 后续优先补：
 
-1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新和审批状态刷新同步已落地，下一步是跨工作区 thread spaces 的独立存储、真实订阅式 approval/worker 状态流和授权执行闭环。
+1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步和跨工作区 thread spaces 存储首版已落地，下一步是真实订阅式 approval/worker 状态流、授权执行闭环和多项目 thread space 管理器。
 2. 继续把 `Changes / Diff` 从单文件派生面板升级成完整多文件 diff 系统：多文件 proposal、真实文件路径映射、hunk 解释、回滚草案、历史 diff、与审批队列双向同步。
 3. 继续把 `底部 Panel` 从本地 runtime log 流升级成真实可审查运行面板：allowlist 验证命令闭环已落地，下一步是 Worker/Gateway 事件订阅、历史命令索引和 stdout/stderr 更细分流。
 4. 把 `工作区文件树` 从当前搜索/折叠/最近文件/只读预览/跳转编辑器继续升级成完整 Workspace Explorer：目录级操作、文件操作草案、跨项目定位；写入继续走 approval。
@@ -197,3 +199,4 @@
 7. Multi Workspace Manager：每个项目独立 workspace、记忆、Skills、权限 profile。
 8. Skills Market / Skill 路由管理。
 9. 真实 MCP transport / streaming。
+10. Specs / Steering / Hooks 从当前只读控制面升级为真实项目文件协议：生成 `.lumen/specs/*`、`.lumen/steering/*` 与 hooks 草案，仍通过 approval queue 写入。
