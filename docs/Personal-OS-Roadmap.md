@@ -187,6 +187,7 @@
 44. 底部 `终端` Panel 已接入 allowlist 命令闭环：新增命令预设、命令输入、`只校验` 和 `执行 allowlist`；执行仍必须满足 Gateway `--execute-command`、payload `execute=true`、validators pass 和 verification allowlist 命中。结果会写入 terminal runtime log 与当前 Agent 线程工具消息，危险命令仍 blocked。
 45. Agent 线程跨工作区 thread spaces 独立存储首版已落地：新增 `lumenos-agent-thread-spaces` v1 索引，按 `workspace:<id>` / `unbound` 分桶保存线程，并从旧 `lumenos-agent-threads` 自动迁移；运行时仍展开为列表兼容现有 UI，侧边栏和线程管理器显示当前线程空间、space 数和各空间线程数，切换当前工作区时优先选择该 workspace 的可见线程。
 46. `规格 / 钩子` 控制面已落地：原“自动化”视图升级为 Kiro / Claude Code 风格的 Spec-driven Agent 面板，展示 Specs 工作流（Requirements / Design / Tasks / Review）、Steering 规则、Agent Hooks、MCP 治理、Subagents 和执行闸门。该面板只做策略、草案和审计展示，不会绕过 Gateway 审批或直接执行外部动作。
+47. Specs / Steering / Hooks 项目协议审批入口已落地：`规格 / 钩子` 面板新增“生成协议草案”和“提交写入审批”，会生成 `.lumen/specs/current/requirements.md`、`.lumen/specs/current/design.md`、`.lumen/specs/current/tasks.md`、`.lumen/steering/lumenos.md`、`.lumen/hooks/lumenos-hooks.md` 五个 Markdown 草案，并逐个调用 Gateway `write_file`。请求不带 `execute=true`，因此默认只进入 approval queue；审批 ID 会回写当前 Agent 线程和底部审批复核台。
 
 后续优先补：
 
@@ -199,4 +200,4 @@
 7. Multi Workspace Manager：每个项目独立 workspace、记忆、Skills、权限 profile。
 8. Skills Market / Skill 路由管理。
 9. 真实 MCP transport / streaming。
-10. Specs / Steering / Hooks 从当前只读控制面升级为真实项目文件协议：生成 `.lumen/specs/*`、`.lumen/steering/*` 与 hooks 草案，仍通过 approval queue 写入。
+10. Specs / Steering / Hooks 下一步从“审批入口”升级为完整协议管理器：读取现有 `.lumen/*`、显示历史版本、做 diff/merge，并在用户批准后执行写入。

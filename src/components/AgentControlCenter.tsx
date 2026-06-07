@@ -183,6 +183,22 @@ interface MemoryDraftActionSnapshot {
   result: JsonRecord | null;
 }
 
+interface SpecProtocolDraftFile {
+  path: string;
+  title: string;
+  kind: "spec" | "steering" | "hook";
+  content: string;
+}
+
+interface SpecProtocolDraftSnapshot {
+  status: string;
+  detail: string;
+  at: number;
+  files: SpecProtocolDraftFile[];
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+}
+
 type DetailTab = "overview" | "memory" | "skills" | "providers" | "workers";
 type WorkbenchView = "agent" | "workspaces" | "memory" | "skills" | "tools" | "providers" | "workers" | "automation" | "writing";
 type BottomPanelTab = "terminal" | "output" | "problems" | "workers" | "gateway" | "approvals";
@@ -1703,6 +1719,14 @@ export function AgentControlCenter({
   const [memoryDimensionFilter, setMemoryDimensionFilter] = useState("all");
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [memoryDraftAction, setMemoryDraftAction] = useState<MemoryDraftActionSnapshot | null>(null);
+  const [specProtocolDraft, setSpecProtocolDraft] = useState<SpecProtocolDraftSnapshot>({
+    status: "",
+    detail: "",
+    at: 0,
+    files: [],
+    request: null,
+    result: null,
+  });
   const [approvalActionFilter, setApprovalActionFilter] = useState("all");
   const [approvalStatusFilter, setApprovalStatusFilter] = useState("all");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string | null>(null);
@@ -4134,6 +4158,179 @@ export function AgentControlCenter({
       });
     }
   };
+  const createSpecProtocolDraft = () => {
+    const files = buildSpecProtocolFiles();
+    const request: JsonRecord = {
+      action: "write_file",
+      purpose: "Specs / Steering / Hooks 项目协议草案；只进入 Gateway write_file 审批，不直接落盘。",
+      files: files.map((file) => ({
+        path: file.path,
+        mode: "replace",
+        access_profile: "workspace",
+        content_length: file.content.length,
+        kind: file.kind,
+      })),
+    };
+    setSpecProtocolDraft({
+      status: "draft",
+      detail: `已生成 ${files.length} 个协议文件草案，提交后会逐个进入 write_file 审批。`,
+      at: Date.now(),
+      files,
+      request,
+      result: null,
+    });
+    setQuickAction({ label: "Specs 协议草案", status: "draft", detail: `${files.length} 个文件等待提交审批。` });
+    appendRuntimeLog({
+      channel: "approvals",
+      title: "Specs 协议草案",
+      detail: files.map((file) => file.path).join(" / "),
+      status: "draft",
+    });
+    appendAgentThreadEvent({
+      kind: "note",
+      title: "Specs 协议草案",
+      detail: `已生成 ${files.length} 个 .lumen 协议文件草案；尚未提交 write_file 审批。`,
+      status: "draft",
+    });
+  };
+
+  const submitSpecProtocolApprovals = async () => {
+    const files = specProtocolDraft.files.length ? specProtocolDraft.files : buildSpecProtocolFiles();
+    if (!state.online) {
+      const detail = "Gateway 离线，无法提交 Specs / Steering / Hooks 写入审批。";
+      setSpecProtocolDraft((prev) => ({ ...prev, status: "error", detail, at: Date.now(), files }));
+      setQuickAction({ label: "Specs 协议审批", status: "error", detail });
+      return;
+    }
+    if (!files.length) {
+      const detail = "没有可提交的协议文件草案。";
+      setSpecProtocolDraft((prev) => ({ ...prev, status: "error", detail, at: Date.now(), files: [] }));
+      setQuickAction({ label: "Specs 协议审批", status: "error", detail });
+      return;
+    }
+    const batchRequest: JsonRecord = {
+      files: files.map((file) => ({
+        path: file.path,
+        mode: "replace",
+        access_profile: "workspace",
+        kind: file.kind,
+        content_length: file.content.length,
+      })),
+    };
+    setSpecProtocolDraft({
+      status: "running",
+      detail: `正在提交 ${files.length} 个 write_file 审批草案；请求均不包含 execute=true。`,
+      at: Date.now(),
+      files,
+      request: batchRequest,
+      result: null,
+    });
+    setQuickAction({ label: "Specs 协议审批", status: "running", detail: "正在排队 write_file 审批。" });
+    appendRuntimeLog({
+      channel: "approvals",
+      title: "提交 Specs 协议审批",
+      detail: `${files.length} 个 .lumen 文件进入 write_file 审批。`,
+      status: "running",
+    });
+    try {
+      const results: JsonRecord[] = [];
+      for (const file of files) {
+        const request: JsonRecord = {
+          path: file.path,
+          mode: "replace",
+          access_profile: "workspace",
+          content: file.content,
+        };
+        const result = await bridgeAction("write_file", request);
+        results.push({
+          path: file.path,
+          kind: file.kind,
+          request: {
+            path: file.path,
+            mode: "replace",
+            access_profile: "workspace",
+            content_length: file.content.length,
+          },
+          status: asString(result.status, "approval_required"),
+          approval_id: asString(result.approval_id),
+          message: asString(result.message),
+          result,
+        });
+      }
+      const approvalIds = results.map((item) => asString(item.approval_id)).filter(Boolean);
+      const status = results.every((item) => asString(item.status, "approval_required") === "approval_required")
+        ? "approval_required"
+        : results.some((item) => ["error", "blocked", "failed"].includes(asString(item.status)))
+          ? "partial"
+          : asString(results[0]?.status, "approval_required");
+      const detail = approvalIds.length
+        ? `已提交 ${approvalIds.length}/${files.length} 个 write_file 审批：${approvalIds.map((id) => compactApprovalId(id)).join(" / ")}`
+        : `已提交 ${files.length} 个 write_file 审批草案，等待 Gateway 返回审批 ID。`;
+      const approvalAttachments = results
+        .map((item) => {
+          const approvalId = asString(item.approval_id);
+          if (!approvalId) return null;
+          return createAgentThreadContextAttachment({
+            kind: "approval",
+            title: `审批 ${compactApprovalId(approvalId)}`,
+            detail: `write_file · ${asString(item.path, ".lumen")} · Specs 协议文件`,
+            ref: approvalId,
+            source: "规格 / 钩子",
+            status,
+          });
+        })
+        .filter((item): item is AgentThreadContextAttachment => Boolean(item));
+      setSpecProtocolDraft({
+        status,
+        detail,
+        at: Date.now(),
+        files,
+        request: batchRequest,
+        result: { files: results, approval_ids: approvalIds },
+      });
+      setQuickAction({ label: "Specs 协议审批", status, detail });
+      appendRuntimeLog({
+        channel: "approvals",
+        title: "Specs 协议审批已排队",
+        detail,
+        status,
+      });
+      appendAgentThreadEvent({
+        kind: "approval",
+        title: "Specs / Steering / Hooks 审批",
+        detail,
+        status,
+        approvalDelta: approvalIds.length,
+        approvalId: approvalIds[0],
+        contextAttachments: approvalAttachments,
+      });
+      setBottomPanelTab("approvals");
+      void refresh();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Specs / Steering / Hooks 审批提交失败";
+      setSpecProtocolDraft((prev) => ({
+        ...prev,
+        status: "error",
+        detail,
+        at: Date.now(),
+        files,
+        request: batchRequest,
+      }));
+      setQuickAction({ label: "Specs 协议审批", status: "error", detail });
+      appendRuntimeLog({
+        channel: "approvals",
+        title: "Specs 协议审批失败",
+        detail,
+        status: "error",
+      });
+      appendAgentThreadEvent({
+        kind: "approval",
+        title: "Specs 协议审批失败",
+        detail,
+        status: "error",
+      });
+    }
+  };
   const agentTraceRows = [
     {
       label: "目标锁定",
@@ -4326,6 +4523,141 @@ export function AgentControlCenter({
       detail: `已开 ${enabledTools.length} · 受控 ${gatedTools.length}；危险工具不进入默认选择面。`,
     },
   ];
+  const buildSpecProtocolFiles = (): SpecProtocolDraftFile[] => {
+    const now = new Date().toLocaleString("zh-CN");
+    const objective = activeThread?.task || commandTask.trim() || "继续把灵枢 LumenOS 建成 Personal Agent OS / Agent IDE。";
+    const threadTitle = activeThread?.title || "未选择线程";
+    const workspaceTitle = activeWorkspace?.title || "未绑定工作区";
+    const contextLines = (activeThread?.contextAttachments || []).slice(0, 12)
+      .map((item) => `- ${item.kind}: ${item.title} | ${item.detail} | ref=${item.ref}`)
+      .join("\n") || "- 暂无线程附件；先用工作区、记忆摘要和命令中心任务作为上下文。";
+    const approvalLines = activeThreadLinkedApprovalRows.slice(0, 12)
+      .map((item) => `- ${asString(item.action, "approval")} | ${asString(item.status, "pending")} | ${asString(item.target, "未声明目标")} | ${asString(item.id)}`)
+      .join("\n") || "- 暂无已关联审批；写入、联网、MCP、Scheduler、远程模型仍必须进入 Gateway 审批。";
+    const specLines = specWorkflowRows
+      .map((row) => `- [${statusLabel(row.status)}] ${row.phase} / ${row.label}: ${row.detail}`)
+      .join("\n");
+    const steeringLines = steeringRows
+      .map((row) => `- ${row.label} (${row.path}): ${row.detail}`)
+      .join("\n");
+    const hookLines = hookPolicyRows
+      .map((row) => `- ${row.event} [${statusLabel(row.status)}]: ${row.detail}`)
+      .join("\n");
+    const subagentLines = subagentRows
+      .map((row) => `- ${row.label} [${statusLabel(row.status)}] tools=${row.tools}: ${row.detail}`)
+      .join("\n");
+    const mcpLines = mcpGovernanceRows
+      .map((row) => `- ${row.label} [${statusLabel(row.status)}]: ${row.detail}`)
+      .join("\n");
+    const safetyLines = approvalGateRows
+      .map((row) => `- ${row.label} [${statusLabel(row.status)}]: ${row.detail}`)
+      .join("\n");
+    const requirements = [
+      "# Requirements",
+      "",
+      `生成时间：${now}`,
+      `线程：${threadTitle}`,
+      `工作区：${workspaceTitle}`,
+      "",
+      "## 目标",
+      objective,
+      "",
+      "## 验收要求",
+      "- 首屏继续保持 VS Code / Codex / Claude Code 式 Agent Workbench，而不是写作前端。",
+      "- 默认任务流是 Agent 线程、context_pack、工具计划、审批、Diff、终端和运行日志。",
+      "- 写作 Agent 只作为领域 Agent 挂载，不定义整个产品边界。",
+      "- Specs / Steering / Hooks 只生成协议草案；落盘必须走 Gateway write_file 审批。",
+      "- 远程模型、MCP、Scheduler、Skill runtime、命令执行和文件写入全部保留显式 gate。",
+      "",
+      "## 当前上下文",
+      contextLines,
+      "",
+      "## 关联审批",
+      approvalLines,
+      "",
+      "## Specs 状态",
+      specLines,
+      "",
+    ].join("\n");
+    const design = [
+      "# Design",
+      "",
+      `生成时间：${now}`,
+      "",
+      "## Workbench 架构",
+      "- Header：品牌、工作区、模型设置、布局 Part 控制。",
+      "- Activity Bar：Agent OS、工作区、记忆、Skills、工具、后台任务等顶层 View Container。",
+      "- 主侧边栏：资源管理器、Agent 线程、工作区文件树、线程空间。",
+      "- 主工作区：Agent 运行线程、命令中心、Specs 控制面、Memory / Provider / Worker 管理器。",
+      "- 辅助侧边栏：Changes / Diff、只读文件预览、审批与运行上下文。",
+      "- 底部 Panel：终端、输出、问题、Worker、Gateway、审批复核台。",
+      "",
+      "## Steering",
+      steeringLines,
+      "",
+      "## Hooks",
+      hookLines,
+      "",
+      "## Subagents",
+      subagentLines,
+      "",
+      "## MCP / Tool Governance",
+      mcpLines,
+      "",
+      "## 安全边界",
+      safetyLines,
+      "",
+    ].join("\n");
+    const tasks = [
+      "# Tasks",
+      "",
+      `生成时间：${now}`,
+      "",
+      "## 当前可执行步骤",
+      "- [ ] 复核 Requirements / Design / Tasks 草案是否符合当前线程目标。",
+      "- [ ] 接受后通过 `write_file` 审批写入 `.lumen/specs/current/*`。",
+      "- [ ] 复核 Steering 草案，确认哪些规则应进入 `.lumen/steering/*`。",
+      "- [ ] 后续把 Hooks 从策略视图升级为可审查 hook 草案，不直接执行。",
+      "- [ ] 把多项目 thread spaces 与 Specs 目录绑定，形成真实项目协议。",
+      "",
+      "## 阻断条件",
+      "- 不允许绕过 Gateway approval queue。",
+      "- 不允许从泄露源码复制实现。",
+      "- 不允许把 Writing Agent 重新抬成产品外壳。",
+      "",
+    ].join("\n");
+    const steering = [
+      "# LumenOS Steering",
+      "",
+      `生成时间：${now}`,
+      "",
+      steeringLines,
+      "",
+      "## 术语保留",
+      "- Skills、tokens、Provider、Gateway、Worker、MCP、context_pack、thread_context 保留英文技术词。",
+      "- 其他 UI 文案中文优先。",
+      "",
+    ].join("\n");
+    const hooks = [
+      "# LumenOS Hooks Draft",
+      "",
+      `生成时间：${now}`,
+      "",
+      hookLines,
+      "",
+      "## 执行规则",
+      "- 当前文件只是 hooks 协议草案，不注册系统 hook。",
+      "- 真正启用 hook 前必须进入审批队列，并声明事件、作用域、允许工具和回滚策略。",
+      "",
+    ].join("\n");
+    return [
+      { path: ".lumen/specs/current/requirements.md", title: "Requirements", kind: "spec", content: requirements },
+      { path: ".lumen/specs/current/design.md", title: "Design", kind: "spec", content: design },
+      { path: ".lumen/specs/current/tasks.md", title: "Tasks", kind: "spec", content: tasks },
+      { path: ".lumen/steering/lumenos.md", title: "Steering", kind: "steering", content: steering },
+      { path: ".lumen/hooks/lumenos-hooks.md", title: "Hooks", kind: "hook", content: hooks },
+    ];
+  };
   const agentModelTaskReady = Boolean((threadComposer.trim() || commandTask.trim() || activeThread?.task || "").trim());
   const agentModelWorkerRunning = ["queued", "starting", "running"].includes(agentModelWorker.status);
   const agentModelGateDetail = apiReady
@@ -6523,6 +6855,8 @@ export function AgentControlCenter({
         status: phaseStatus,
         actions: (
           <>
+            <ActionButton label="生成协议草案" icon={<FileText className="h-3.5 w-3.5" />} onClick={createSpecProtocolDraft} />
+            <ActionButton label="提交写入审批" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void submitSpecProtocolApprovals()} disabled={!state.online || specProtocolDraft.status === "running"} />
             <ActionButton label="KAIROS Tick" icon={<Timer className="h-3.5 w-3.5" />} onClick={() => void runQuickAction("KAIROS Tick", "kairos_tick", { include_suggestions: true, limit: 5 })} disabled={!state.online || quickAction.status === "running"} />
             <ActionButton label="计划任务草案" icon={<ListChecks className="h-3.5 w-3.5" />} onClick={() => void runQuickAction("计划任务草案", "scheduler_plan", { mode: "draft" })} disabled={!state.online || quickAction.status === "running"} />
           </>
@@ -6577,6 +6911,67 @@ export function AgentControlCenter({
                 ))}
               </div>
             </div>
+          </div>
+          <div className="mt-4 rounded-lg border border-cyan-500/15 bg-slate-950/50 px-3 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <SectionTitle icon={<FileText className="h-4 w-4 text-cyan-300" />} title="项目协议草案" meta=".lumen/specs / steering / hooks" />
+                <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                  生成 Requirements、Design、Tasks、Steering 与 Hooks 草案；提交时逐个调用 `write_file`，默认只进入审批队列。
+                </p>
+              </div>
+              <StatusBadge status={specProtocolDraft.status || "not_generated"} subtle />
+            </div>
+            <div className="mt-3 grid gap-2">
+              {(specProtocolDraft.files.length ? specProtocolDraft.files : buildSpecProtocolFiles()).map((file) => (
+                <div key={file.path} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-[10px] font-medium text-slate-200">{file.title}</span>
+                      <span className="rounded bg-slate-950 px-1.5 py-0.5 text-[10px] text-cyan-200">{file.kind}</span>
+                    </div>
+                    <PathLine value={file.path} />
+                  </div>
+                  <span className="shrink-0 rounded bg-slate-950 px-2 py-1 font-mono text-[10px] text-slate-500">{formatNumber(file.content.length)} chars</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <ActionButton label="生成协议草案" icon={<FileText className="h-3.5 w-3.5" />} onClick={createSpecProtocolDraft} />
+              <ActionButton label="提交 write_file 审批" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void submitSpecProtocolApprovals()} disabled={!state.online || specProtocolDraft.status === "running"} />
+              <button
+                type="button"
+                onClick={() => setBottomPanelTab("approvals")}
+                className="inline-flex h-8 items-center gap-2 rounded border border-slate-800 bg-slate-950 px-3 text-xs text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-slate-200"
+              >
+                打开审批复核台
+              </button>
+            </div>
+            {specProtocolDraft.detail && (
+              <div className="mt-3 rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] leading-relaxed text-cyan-100">
+                {specProtocolDraft.detail}
+              </div>
+            )}
+            {(specProtocolDraft.request || specProtocolDraft.result) && (
+              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                {specProtocolDraft.request && (
+                  <div className="rounded border border-slate-800 bg-slate-950/70 px-2 py-2">
+                    <div className="mb-2 text-[10px] font-medium text-slate-300">写入审批请求</div>
+                    <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-slate-500">
+                      {JSON.stringify(specProtocolDraft.request, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {specProtocolDraft.result && (
+                  <div className="rounded border border-slate-800 bg-slate-950/70 px-2 py-2">
+                    <div className="mb-2 text-[10px] font-medium text-slate-300">审批返回</div>
+                    <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-slate-500">
+                      {JSON.stringify(specProtocolDraft.result, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="space-y-4">
