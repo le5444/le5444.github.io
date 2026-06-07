@@ -188,14 +188,15 @@
 45. Agent 线程跨工作区 thread spaces 独立存储首版已落地：新增 `lumenos-agent-thread-spaces` v1 索引，按 `workspace:<id>` / `unbound` 分桶保存线程，并从旧 `lumenos-agent-threads` 自动迁移；运行时仍展开为列表兼容现有 UI，侧边栏和线程管理器显示当前线程空间、space 数和各空间线程数，切换当前工作区时优先选择该 workspace 的可见线程。
 46. `规格 / 钩子` 控制面已落地：原“自动化”视图升级为 Kiro / Claude Code 风格的 Spec-driven Agent 面板，展示 Specs 工作流（Requirements / Design / Tasks / Review）、Steering 规则、Agent Hooks、MCP 治理、Subagents 和执行闸门。该面板只做策略、草案和审计展示，不会绕过 Gateway 审批或直接执行外部动作。
 47. Specs / Steering / Hooks 项目协议审批入口已落地：`规格 / 钩子` 面板新增“生成协议草案”和“提交写入审批”，会生成 `.lumen/specs/current/requirements.md`、`.lumen/specs/current/design.md`、`.lumen/specs/current/tasks.md`、`.lumen/steering/lumenos.md`、`.lumen/hooks/lumenos-hooks.md` 五个 Markdown 草案，并逐个调用 Gateway `write_file`。请求不带 `execute=true`，因此默认只进入 approval queue；审批 ID 会回写当前 Agent 线程和底部审批复核台。
+48. 审批复核台已接入 `approval_decide` 决策闭环：Gateway 现在可对单条 approval 记录写入 `decision`，支持拒绝审批，或在 Gateway `--execute-write` 与前端显式 execute 请求同时满足时执行已排队的 `write_file` 审批；前端复核台新增“拒绝审批”“执行 write_file”和 `Decision 决策` 详情页签，结果会进入底部审批日志和当前 Agent 线程。该执行器 v1 不执行任意 action，只处理 `write_file`，Memory / Provider / MCP / Scheduler 仍保留后续专用执行门。
 
 后续优先补：
 
-1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步和跨工作区 thread spaces 存储首版已落地，下一步是真实订阅式 approval/worker 状态流、授权执行闭环和多项目 thread space 管理器。
+1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步、跨工作区 thread spaces 存储和 write_file 授权执行闭环首版已落地，下一步是真实订阅式 approval/worker 状态流、更多专用审批执行器和多项目 thread space 管理器。
 2. 继续把 `Changes / Diff` 从单文件派生面板升级成完整多文件 diff 系统：多文件 proposal、真实文件路径映射、hunk 解释、回滚草案、历史 diff、与审批队列双向同步。
 3. 继续把 `底部 Panel` 从本地 runtime log 流升级成真实可审查运行面板：allowlist 验证命令闭环已落地，下一步是 Worker/Gateway 事件订阅、历史命令索引和 stdout/stderr 更细分流。
 4. 把 `工作区文件树` 从当前搜索/折叠/最近文件/只读预览/跳转编辑器继续升级成完整 Workspace Explorer：目录级操作、文件操作草案、跨项目定位；写入继续走 approval。
-5. 升级 Memory Manager：补 memory proposal diff、审批后执行器和手动合并交互；当前 approval 队列已可只读复核，但 Gateway 管理门仍是 approval-only。
+5. 升级 Memory Manager：补 memory proposal diff、Memory 专用审批执行器和手动合并交互；当前通用 approval 执行器 v1 只处理 write_file，Memory 管理门仍是 approval-only。
 6. Provider/API 设置中心的 profile 编辑、live status/probe 执行授权流和模型 worker 测试闭环。
 7. Multi Workspace Manager：每个项目独立 workspace、记忆、Skills、权限 profile。
 8. Skills Market / Skill 路由管理。
