@@ -32,33 +32,33 @@ TRUTHY = {"1", "true", "yes", "on"}
 PERMISSION_PROFILES: dict[str, dict[str, Any]] = {
     "safe": {
         "label": "Safe read-only",
-        "description": "Read workspace context and run memory/KAIROS observation loops; no direct writes, network tools, scheduler, full-access files, or command execution.",
-        "gateway": {"execute_read": True, "execute_write": False, "execute_command": False, "execute_scheduler": False, "execute_web": False, "execute_mcp": False, "execute_skill": False, "full_access_files": False},
+        "description": "Read workspace context and run memory/KAIROS observation loops; no direct writes, provider probes, network tools, scheduler, full-access files, or command execution.",
+        "gateway": {"execute_read": True, "execute_write": False, "execute_command": False, "execute_scheduler": False, "execute_web": False, "execute_mcp": False, "execute_provider": False, "execute_skill": False, "full_access_files": False},
     },
     "workspace": {
         "label": "Workspace tools",
-        "description": "Default desktop mode: workspace read/write tools plus memory/KAIROS observation; external connectors and full filesystem access stay off.",
-        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": False, "execute_web": False, "execute_mcp": False, "execute_skill": False, "full_access_files": False},
+        "description": "Default desktop mode: workspace read/write tools plus Provider model-list probes and memory/KAIROS observation; web/MCP connectors and full filesystem access stay off.",
+        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": False, "execute_web": False, "execute_mcp": False, "execute_provider": True, "execute_skill": False, "full_access_files": False},
     },
     "network": {
         "label": "Workspace + network connectors",
-        "description": "Workspace tools plus gated web_fetch and HTTP/registered-stdio MCP calls. Remote model/provider probes still need per-request approval flags.",
-        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": False, "execute_web": True, "execute_mcp": True, "execute_skill": False, "full_access_files": False},
+        "description": "Workspace tools plus Provider model-list probes, gated web_fetch, and HTTP/registered-stdio MCP calls. Remote probes still need per-request approval flags.",
+        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": False, "execute_web": True, "execute_mcp": True, "execute_provider": True, "execute_skill": False, "full_access_files": False},
     },
     "full": {
         "label": "Full filesystem profile",
         "description": "Network profile plus full_access file paths. Dangerous shell remains disabled; file writes still require request execute=true.",
-        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": False, "execute_web": True, "execute_mcp": True, "execute_skill": False, "full_access_files": True},
+        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": False, "execute_web": True, "execute_mcp": True, "execute_provider": True, "execute_skill": False, "full_access_files": True},
     },
     "autonomy": {
         "label": "Autonomy profile",
-        "description": "Workspace tools plus scheduler permission for reviewed KAIROS plans. Full filesystem and arbitrary shell remain off.",
-        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": True, "execute_web": False, "execute_mcp": False, "execute_skill": False, "full_access_files": False},
+        "description": "Workspace tools plus Provider model-list probes and scheduler permission for reviewed KAIROS plans. Full filesystem and arbitrary shell remain off.",
+        "gateway": {"execute_read": True, "execute_write": True, "execute_command": False, "execute_scheduler": True, "execute_web": False, "execute_mcp": False, "execute_provider": True, "execute_skill": False, "full_access_files": False},
     },
     "dev": {
         "label": "Developer verification profile",
-        "description": "Workspace tools plus allowlisted verification commands and reviewed activated Skill runtime. Arbitrary shell remains disabled.",
-        "gateway": {"execute_read": True, "execute_write": True, "execute_command": True, "execute_scheduler": False, "execute_web": False, "execute_mcp": False, "execute_skill": True, "full_access_files": False},
+        "description": "Workspace tools plus Provider model-list probes, allowlisted verification commands, and reviewed activated Skill runtime. Arbitrary shell remains disabled.",
+        "gateway": {"execute_read": True, "execute_write": True, "execute_command": True, "execute_scheduler": False, "execute_web": False, "execute_mcp": False, "execute_provider": True, "execute_skill": True, "full_access_files": False},
     },
 }
 
@@ -135,6 +135,7 @@ def resolve_permission_profile(profile: str | None) -> dict[str, Any]:
         "execute_scheduler": ("ZHIMENG_EXECUTE_SCHEDULER", gateway["execute_scheduler"]),
         "execute_web": ("ZHIMENG_EXECUTE_WEB", gateway["execute_web"]),
         "execute_mcp": ("ZHIMENG_EXECUTE_MCP", gateway["execute_mcp"]),
+        "execute_provider": ("ZHIMENG_EXECUTE_PROVIDER", gateway["execute_provider"]),
         "execute_skill": ("ZHIMENG_EXECUTE_SKILL", gateway["execute_skill"]),
         "full_access_files": ("ZHIMENG_FULL_ACCESS_FILES", gateway["full_access_files"]),
     }
@@ -193,6 +194,7 @@ def start_gateway(root: Path, permission: dict[str, Any], gateway_port: int) -> 
             "execute_scheduler": bool(gateway["execute_scheduler"]),
             "execute_web": bool(gateway["execute_web"]),
             "execute_mcp": bool(gateway["execute_mcp"]),
+            "execute_provider": bool(gateway["execute_provider"]),
             "execute_skill": bool(gateway["execute_skill"]),
             "full_access_files": bool(gateway["full_access_files"]),
         },

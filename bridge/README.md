@@ -125,6 +125,12 @@ Gateway mode with workspace file tools:
 python bridge/zhimeng_bridge.py --serve --execute-read --execute-write
 ```
 
+Gateway mode with workspace file tools and Provider model-list probes:
+
+```powershell
+python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute-provider
+```
+
 Gateway mode with reviewed activated Skill runtime:
 
 ```powershell
@@ -146,13 +152,13 @@ python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute
 Gateway mode with bounded API/Web fetch:
 
 ```powershell
-python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute-web
+python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute-provider --execute-web
 ```
 
 Gateway mode with bounded API/Web fetch and HTTP/registered-stdio MCP connector:
 
 ```powershell
-python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute-web --execute-mcp
+python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute-provider --execute-web --execute-mcp
 ```
 
 Gateway mode with conservative KAIROS heartbeat:

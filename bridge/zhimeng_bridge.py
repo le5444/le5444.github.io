@@ -69,6 +69,7 @@ SKILL_RUN_BLOCKED_PATTERNS = [
 SAFE_WORKER_BRIDGE_ACTIONS = {
     "search",
     "status",
+    "workspace_scan",
     "memory_status",
     "memory_retrieve",
     "memory_bootstrap",
@@ -85,6 +86,7 @@ SAFE_WORKER_BRIDGE_ACTIONS = {
     "skill_status",
     "skill_run",
     "scheduler_status",
+    "runtime_events",
     "worker_status",
     "worker_cancel",
     "worker_merge_proposal",
@@ -387,6 +389,116 @@ def write_text_file(payload: Dict[str, Any], target: Path) -> Dict[str, Any]:
     }
 
 
+def workspace_scan(payload: Dict[str, Any], target: Path, root_raw: str) -> Dict[str, Any]:
+    if not target.exists():
+        raise ValueError("scan root does not exist")
+    if not target.is_dir():
+        raise ValueError("scan root must be a directory")
+    limit = max(1, min(int(payload.get("limit") or 200), 1000))
+    max_depth = max(0, min(int(payload.get("max_depth") or 3), 8))
+    include_hidden = bool(payload.get("include_hidden", False))
+    include_dirs = bool(payload.get("include_dirs", True))
+    include_files = bool(payload.get("include_files", True))
+    skip_dirs = set(SKIP_DIRS)
+    for item in payload.get("exclude_dirs") or []:
+        value = str(item).strip()
+        if value:
+            skip_dirs.add(value)
+    allowed_exts = {
+        str(item).lower().strip()
+        for item in (payload.get("extensions") or payload.get("allowed_extensions") or [])
+        if str(item).strip()
+    }
+    allowed_exts = {item if item.startswith(".") else f".{item}" for item in allowed_exts}
+    rows: List[Dict[str, Any]] = []
+    skipped = 0
+    root = target.resolve()
+
+    def should_skip(path: Path) -> bool:
+        name = path.name
+        if not include_hidden and name.startswith("."):
+            return True
+        if path.is_dir() and name in skip_dirs:
+            return True
+        if path.is_file() and allowed_exts and path.suffix.lower() not in allowed_exts:
+            return True
+        return False
+
+    def push(path: Path, depth: int) -> None:
+        nonlocal skipped
+        if len(rows) >= limit:
+            skipped += 1
+            return
+        if should_skip(path):
+            skipped += 1
+            return
+        is_dir = path.is_dir()
+        if (is_dir and not include_dirs) or ((not is_dir) and not include_files):
+            return
+        try:
+            stat = path.stat()
+        except OSError:
+            skipped += 1
+            return
+        try:
+            rel = str(path.relative_to(root)).replace("\\", "/")
+        except ValueError:
+            rel = path.name
+        rows.append({
+            "path": rel,
+            "name": path.name,
+            "is_dir": is_dir,
+            "extension": "" if is_dir else path.suffix.lower(),
+            "size": 0 if is_dir else int(stat.st_size),
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            "depth": depth,
+        })
+
+    def walk(directory: Path, depth: int) -> None:
+        nonlocal skipped
+        if depth > max_depth or len(rows) >= limit:
+            return
+        try:
+            children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+        except OSError:
+            skipped += 1
+            return
+        for child in children:
+            if len(rows) >= limit:
+                skipped += 1
+                break
+            if should_skip(child):
+                skipped += 1
+                continue
+            push(child, depth)
+            if child.is_dir() and depth < max_depth:
+                walk(child, depth + 1)
+
+    walk(root, 1)
+    file_count = len([item for item in rows if not item["is_dir"]])
+    dir_count = len([item for item in rows if item["is_dir"]])
+    return {
+        "status": "ok",
+        "root": str(root),
+        "root_input": root_raw,
+        "access_profile": normalize_file_access_profile(payload),
+        "max_depth": max_depth,
+        "limit": limit,
+        "returned": len(rows),
+        "has_more": skipped > 0,
+        "skipped": skipped,
+        "file_count": file_count,
+        "dir_count": dir_count,
+        "items": rows,
+        "policy": {
+            "content_read": False,
+            "metadata_only": True,
+            "skip_dirs": sorted(skip_dirs),
+            "allowed_extensions": sorted(allowed_exts),
+        },
+    }
+
+
 def validate_command(command: str, cwd: str = "", purpose: str = "") -> List[Dict[str, str]]:
     text = f"{command}\n{cwd}\n{purpose}"
     hits = []
@@ -446,6 +558,16 @@ def runtime_capabilities(
             "gateway_flag": "--execute-read",
             "request_gate": "payload.execute=true",
             "scope": "workspace; full_access also requires --full-access-files",
+            "default": "dry_run",
+        },
+        {
+            "action": "workspace_scan",
+            "label": "Workspace Scan",
+            "enabled": bool(execute_read),
+            "mode": "metadata-scan" if execute_read else "dry-run",
+            "gateway_flag": "--execute-read",
+            "request_gate": "payload.execute=true",
+            "scope": "directory metadata only; full_access also requires --full-access-files",
             "default": "dry_run",
         },
         {
@@ -811,6 +933,42 @@ def redact_headers(headers: Dict[str, Any]) -> Dict[str, str]:
             continue
         redacted[clean_key] = "[redacted]" if is_sensitive_header(clean_key) else str(value)[:300]
     return redacted
+
+
+def is_sensitive_record_key(name: str) -> bool:
+    return bool(re.search(r"authorization|cookie|set-cookie|x-api-key|api[-_]?key|apikey|password|passwd|token|secret", name, flags=re.IGNORECASE))
+
+
+def redact_url_secrets(value: str) -> str:
+    if not value or "?" not in value:
+        return value
+    try:
+        parsed = urlparse(value)
+        if not parsed.query:
+            return value
+        query = []
+        changed = False
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True):
+            if is_sensitive_record_key(key) or key.strip().lower() == "key":
+                query.append((key, "[redacted]"))
+                changed = True
+            else:
+                query.append((key, item))
+        return urlunparse(parsed._replace(query=urlencode(query))) if changed else value
+    except Exception:
+        return value
+
+
+def redact_record_secrets(value: Any, key_hint: str = "") -> Any:
+    if is_sensitive_record_key(key_hint):
+        return "[redacted]" if value not in (None, "", False) else value
+    if isinstance(value, dict):
+        return {str(key): redact_record_secrets(item, str(key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_record_secrets(item, key_hint) for item in value]
+    if isinstance(value, str):
+        return redact_url_secrets(value)
+    return value
 
 
 def is_private_web_host(hostname: str) -> bool:
@@ -1346,7 +1504,7 @@ def safety_review(action: str, purpose: str, payload: Dict[str, Any]) -> List[Di
         "Command validators blocked this request." if command_blocked else "Action requires approval or explicit execution flags." if action in approval_actions else "Action is read/stateful within Gateway policy.",
     ))
 
-    empty_payload_allowed = {"status", "approval_status", "memory_status", "memory_backup_status", "memory_retrieve", "memory_bootstrap", "memory_consolidate", "context_pack", "source_audit", "source_digest", "provider_catalog", "provider_status", "provider_probe", "mcp_stdio_catalog", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_status", "skill_crystallize", "skill_review", "skill_activate", "kairos_tick", "scheduler_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "worker_status", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "user_model_status", "user_model_reflect", "swarm_bootstrap", "evolution_bootstrap"}
+    empty_payload_allowed = {"status", "approval_status", "runtime_events", "memory_status", "memory_backup_status", "memory_retrieve", "memory_bootstrap", "memory_consolidate", "context_pack", "source_audit", "source_digest", "provider_catalog", "provider_status", "provider_probe", "mcp_stdio_catalog", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_status", "skill_crystallize", "skill_review", "skill_activate", "kairos_tick", "scheduler_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "worker_status", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "user_model_status", "user_model_reflect", "swarm_bootstrap", "evolution_bootstrap"}
     review.append(safety_item(
         "input",
         "pass" if payload or action in empty_payload_allowed else "warn",
@@ -1379,6 +1537,7 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             {"action": "search", "mode": "read", "description": "Search readable project text files."},
             {"action": "status", "mode": "read", "description": "Inspect bridge health, recent runs, and workflow state."},
             {"action": "approval_status", "mode": "read", "description": "Inspect recent approval queue records without executing them."},
+            {"action": "runtime_events", "mode": "read", "description": "Read a unified Gateway runtime timeline from runs, approvals, and worker events."},
             {"action": "approval_decide", "mode": "approval-executor", "description": "Reject a queued approval, execute queued write_file with execute-write, queued memory management with execute-memory, or queued provider_probe with execute-provider."},
             {"action": "advance", "mode": "stateful", "description": "Advance a registered workflow DAG node."},
             {"action": "run", "mode": "stateful", "description": "Register or update a workflow DAG run."},
@@ -1431,6 +1590,7 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             {"action": "lock_release", "mode": "stateful", "description": "Release a previously acquired lock."},
             {"action": "subagent_status", "mode": "read", "description": "Inspect registered subagents and locks."},
             {"action": "read_file", "mode": "execute-read", "description": "Read a workspace/full-access file only when matching execution flags and access profile are enabled."},
+            {"action": "workspace_scan", "mode": "execute-read", "description": "List directory metadata for a workspace/full-access root only when read execution gates are enabled; file content is not read."},
             {"action": "write_file", "mode": "approval-or-execute-write", "description": "Queue a write approval by default; execute text writes with backups when execute-write is enabled."},
             {"action": "run_command", "mode": "approval-required", "description": "Validate command drafts; allowlisted verification execution requires explicit opt-in."},
             {"action": "web_fetch", "mode": "approval-or-execute-web", "description": "Bounded HTTP/API fetch only when execute-web is enabled; otherwise approval proposal only."},
@@ -1475,6 +1635,19 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
             "name": "approval_status",
             "description": "Inspect recent approval queue records without approving or executing them.",
             "inputSchema": {"type": "object", "properties": {"limit": {"type": "number"}, "action": {"type": "string"}}},
+        },
+        {
+            "name": "runtime_events",
+            "description": "Read a unified Gateway runtime timeline from runs, approvals, and worker events.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "number"},
+                    "source": {"type": "string", "enum": ["runs", "approvals", "workers"]},
+                    "type": {"type": "string"},
+                    "status": {"type": "string"},
+                },
+            },
         },
         {
             "name": "approval_decide",
@@ -2129,6 +2302,26 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
             },
         },
         {
+            "name": "workspace_scan",
+            "description": "List directory metadata for a workspace/full-access root when read execution gates are enabled; file content is not read.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "execute": {"type": "boolean"},
+                    "access_profile": {"type": "string", "enum": sorted(FILE_ACCESS_PROFILES)},
+                    "max_depth": {"type": "number"},
+                    "limit": {"type": "number"},
+                    "include_hidden": {"type": "boolean"},
+                    "include_dirs": {"type": "boolean"},
+                    "include_files": {"type": "boolean"},
+                    "extensions": {"type": "array"},
+                    "exclude_dirs": {"type": "array"},
+                },
+                "required": ["path"],
+            },
+        },
+        {
             "name": "write_file",
             "description": "Queue a write approval by default, or execute a text write with backup/diff when execute-write is enabled.",
             "inputSchema": {
@@ -2228,8 +2421,8 @@ def save_record(folder: str, req: Dict[str, Any], result: Dict[str, Any]) -> str
     path.write_text(json.dumps({
         "id": record_id,
         "created_at": now_iso(),
-        "request": req,
-        "result": result,
+        "request": redact_record_secrets(req),
+        "result": redact_record_secrets(result),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     return record_id
 
@@ -2265,6 +2458,17 @@ def recent_records(folder: str, limit: int = 20) -> List[Dict[str, Any]]:
 
 def as_record(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def request_record_enabled(req: Dict[str, Any], default: bool = True) -> bool:
+    value = req.get("record")
+    if isinstance(value, bool):
+        return value
+    payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
+    value = payload.get("record")
+    if isinstance(value, bool):
+        return value
+    return default
 
 
 def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2306,6 +2510,205 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
         "summaries": summaries,
         "by_action": by_action,
         "by_status": by_status,
+    }
+
+
+def parse_event_time(value: Any, fallback: float | None = None) -> float:
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value) / 1000 if value > 10_000_000_000 else float(value)
+    text = str(value or "").strip()
+    if text:
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            pass
+    return fallback if fallback is not None else time.time()
+
+
+def runtime_event(
+    source: str,
+    event_type: str,
+    status: str,
+    title: str,
+    detail: str,
+    ref: str,
+    at_value: Any,
+    record: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    at_epoch = parse_event_time(at_value)
+    return {
+        "id": f"{source}:{event_type}:{ref or title}:{at_epoch:.3f}",
+        "source": source,
+        "type": event_type,
+        "status": status or "recorded",
+        "title": title or event_type or source,
+        "detail": detail[:1000],
+        "ref": ref,
+        "at": datetime.fromtimestamp(at_epoch, timezone.utc).isoformat(),
+        "at_epoch": at_epoch,
+        "record": redact_record_secrets(record or {}),
+    }
+
+
+def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
+    limit = max(1, min(int(payload.get("limit") or 80), 200))
+    source_filter = str(payload.get("source") or "").strip().lower()
+    status_filter = str(payload.get("status") or "").strip().lower()
+    type_filter = str(payload.get("type") or "").strip().lower()
+    after_raw = payload.get("after_epoch", payload.get("since_epoch", payload.get("cursor_epoch", 0)))
+    after_epoch = parse_event_time(after_raw, 0) if after_raw not in (None, "", 0) else 0
+    after_id = str(payload.get("after_id") or payload.get("cursor_id") or "").strip()
+    events: List[Dict[str, Any]] = []
+
+    for record in recent_records("runs", limit=limit * 2):
+        request = as_record(record.get("request"))
+        result = as_record(record.get("result"))
+        action = str(request.get("action") or result.get("action") or "unknown")
+        status = str(result.get("status") or "recorded")
+        message = str(result.get("message") or request.get("purpose") or result.get("purpose") or "")
+        events.append(runtime_event(
+            "runs",
+            "gateway_run",
+            status,
+            f"Gateway · {action}",
+            message,
+            str(record.get("id") or ""),
+            record.get("created_at"),
+            {
+                "run_id": record.get("id"),
+                "action": action,
+                "purpose": request.get("purpose") or result.get("purpose"),
+                "approval_id": result.get("approval_id"),
+            },
+        ))
+
+    for record in recent_records("approvals", limit=limit * 2):
+        request = as_record(record.get("request"))
+        result = as_record(record.get("result"))
+        decision = as_record(record.get("decision"))
+        action = str(request.get("action") or result.get("action") or "unknown")
+        status = str(decision.get("status") or result.get("status") or "pending")
+        message = str(decision.get("message") or decision.get("reason") or result.get("message") or request.get("purpose") or "")
+        events.append(runtime_event(
+            "approvals",
+            "approval",
+            status,
+            f"审批 · {action}",
+            message,
+            str(record.get("id") or ""),
+            decision.get("decided_at") or record.get("created_at"),
+            {
+                "approval_id": record.get("id"),
+                "action": action,
+                "purpose": request.get("purpose") or result.get("purpose"),
+                "target": decision.get("target") or result.get("target"),
+            },
+        ))
+
+    worker_state = load_worker_state()
+    jobs = worker_state.get("jobs") if isinstance(worker_state.get("jobs"), dict) else {}
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get("id") or job.get("job_id") or "")
+        job_kind = str(job.get("kind") or "")
+        job_action = str(job.get("action") or as_record(job.get("payload")).get("action") or "")
+        status = str(job.get("status") or "recorded")
+        title_bits = ["Worker", job_kind, job_action]
+        title = " · ".join([item for item in title_bits if item])
+        detail = str(job.get("message") or job.get("purpose") or as_record(job.get("payload")).get("task") or "")
+        events.append(runtime_event(
+            "workers",
+            "worker_job",
+            status,
+            title or "Worker",
+            detail,
+            job_id,
+            job.get("updated_at") or job.get("created_at"),
+            {
+                "job_id": job_id,
+                "kind": job_kind,
+                "action": job_action,
+                "pid": job.get("pid"),
+            },
+        ))
+
+    for event in worker_state.get("events", []) if isinstance(worker_state.get("events"), list) else []:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or "worker_event")
+        status = str(event.get("status") or "recorded")
+        detail_parts = [
+            str(event.get("stage") or ""),
+            str(event.get("message") or ""),
+            str(event.get("text") or "")[:240],
+        ]
+        detail = " · ".join([item for item in detail_parts if item])
+        events.append(runtime_event(
+            "workers",
+            event_type,
+            status,
+            f"Worker 事件 · {event_type}",
+            detail,
+            str(event.get("job_id") or ""),
+            event.get("at"),
+            {
+                "job_id": event.get("job_id"),
+                "stage": event.get("stage"),
+                "chunk_index": event.get("chunk_index"),
+                "status": event.get("status"),
+            },
+        ))
+
+    def keep(event: Dict[str, Any]) -> bool:
+        if source_filter and str(event.get("source") or "").lower() != source_filter:
+            return False
+        if status_filter and str(event.get("status") or "").lower() != status_filter:
+            return False
+        if type_filter and str(event.get("type") or "").lower() != type_filter:
+            return False
+        return True
+
+    matching = [event for event in events if keep(event)]
+    matching.sort(key=lambda item: (float(item.get("at_epoch") or 0), str(item.get("id") or "")), reverse=True)
+    filtered = [
+        event for event in matching
+        if not after_epoch or (
+            float(event.get("at_epoch") or 0) > after_epoch
+            and (not after_id or str(event.get("id") or "") != after_id)
+        )
+    ]
+    summary: Dict[str, int] = {}
+    by_status: Dict[str, int] = {}
+    for event in matching:
+        source = str(event.get("source") or "unknown")
+        status = str(event.get("status") or "recorded")
+        summary[source] = summary.get(source, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+    window = filtered[:limit]
+    latest_matching = matching[0] if matching else {}
+    latest_window = window[0] if window else {}
+    cursor_event = latest_window or latest_matching
+    return {
+        "count": len(window),
+        "total": len(matching),
+        "events": window,
+        "by_source": summary,
+        "by_status": by_status,
+        "sources": ["runs", "approvals", "workers"],
+        "incremental": bool(after_epoch),
+        "after_epoch": after_epoch,
+        "after_id": after_id,
+        "has_new": bool(window),
+        "cursor": {
+            "at_epoch": float(cursor_event.get("at_epoch") or after_epoch or 0),
+            "id": str(cursor_event.get("id") or after_id or ""),
+        },
+        "latest": {
+            "at_epoch": float(latest_matching.get("at_epoch") or 0),
+            "id": str(latest_matching.get("id") or ""),
+        },
+        "window_oldest_epoch": float(window[-1].get("at_epoch") or 0) if window else 0,
     }
 
 
@@ -6931,6 +7334,7 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
     config = resolve_provider_config(payload)
     api_url = str(config.get("api_url") or "").strip()
     provider = str(config.get("provider") or "openai-compatible")
+    request_execute = bool(payload.get("execute") or payload.get("_request_execute"))
     if not api_url:
         raise ValueError("provider_probe api_url or preset_id is required")
     if not bool(execute_provider):
@@ -6940,7 +7344,7 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
             "config": config,
             "policy": provider_registry_policy(),
         }
-    if not bool(payload.get("execute")):
+    if not request_execute:
         return {
             "status": "approval_required",
             "reason": "provider_probe requires payload execute=true before any network probe",
@@ -8038,6 +8442,7 @@ def handle_request(
     action = str(req.get("action") or "").strip()
     purpose = str(req.get("purpose") or "").strip()
     payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
+    request_execute = bool(req.get("execute") or payload.get("execute"))
     access_profile = normalize_file_access_profile(payload)
     result = base_result(action, purpose, execute or execute_write or execute_memory or execute_command or execute_scheduler or execute_web or execute_mcp or execute_provider or execute_skill)
     result["tool_access"] = {
@@ -8118,7 +8523,7 @@ def handle_request(
             result["approval_required"] = True
             result["status"] = "blocked"
             result["message"] = "Command validators blocked this request."
-        elif execute_command and bool(payload.get("execute")):
+        elif execute_command and request_execute:
             execution = run_verification_command(payload)
             result["command_execution"] = execution
             result["approval_required"] = False if execution.get("status") in {"ok", "failed"} else True
@@ -8131,17 +8536,44 @@ def handle_request(
     elif action == "read_file":
         target = resolve_file_path(str(payload.get("path") or ""), access_profile, full_access_files=full_access_files)
         result["target"] = str(target)
-        if not execute:
+        if not (execute and request_execute):
             result["status"] = "dry_run"
             result["message"] = "Start the bridge with --execute-read and pass execute=true to read the file; full_access also requires --full-access-files."
         else:
             result["approval_required"] = False
             result["status"] = "ok"
             result["content"] = target.read_text(encoding="utf-8", errors="replace")[:20000]
+    elif action == "workspace_scan":
+        root_raw = str(payload.get("path") or payload.get("root") or "")
+        target: Path | None = None
+        result["workspace_scan_policy"] = {
+            "metadata_only": True,
+            "content_read": False,
+            "requires": ["Gateway --execute-read", "payload.execute=true"],
+            "full_access_requires": "Gateway --full-access-files plus access_profile=full_access",
+        }
+        if not execute:
+            result["status"] = "dry_run"
+            result["target"] = root_raw
+            result["message"] = "workspace_scan dry-run only; start Gateway with --execute-read and pass execute=true to list directory metadata."
+        elif not request_execute:
+            result["status"] = "dry_run"
+            result["target"] = root_raw
+            result["message"] = "workspace_scan requires payload.execute=true even when Gateway --execute-read is enabled."
+        else:
+            target = resolve_file_path(root_raw, access_profile, full_access_files=full_access_files)
+            result["target"] = str(target)
+            scan = workspace_scan(payload, target, root_raw)
+            result.update({
+                "approval_required": False,
+                "status": "ok",
+                "workspace_scan": scan,
+                "message": "workspace_scan returned metadata only; file contents were not read.",
+            })
     elif action == "write_file":
         target = resolve_file_path(str(payload.get("path") or ""), access_profile, full_access_files=full_access_files)
         result["target"] = str(target)
-        if execute_write and bool(payload.get("execute")):
+        if execute_write and request_execute:
             write_result = write_text_file(payload, target)
             result.update({
                 "approval_required": False,
@@ -8236,6 +8668,13 @@ def handle_request(
             "approval_status": approval_status(payload),
             "message": "Approval queue inspected without approving or executing records.",
         })
+    elif action == "runtime_events":
+        result.update({
+            "approval_required": False,
+            "status": "ok",
+            "runtime_events": runtime_events(payload),
+            "message": "Gateway runtime timeline merged from runs, approvals, and workers.",
+        })
     elif action == "approval_decide":
         decision_result = approval_decide(payload, execute_write=execute_write, execute_memory=execute_memory, execute_provider=execute_provider, full_access_files=full_access_files)
         result.update({
@@ -8298,7 +8737,8 @@ def handle_request(
             "message": "Registered stdio MCP servers returned without spawning processes.",
         })
     elif action == "provider_probe":
-        probe = provider_probe(payload, purpose, execute_provider=execute_provider)
+        probe_payload = {**payload, "_request_execute": True} if request_execute and not payload.get("execute") else payload
+        probe = provider_probe(probe_payload, purpose, execute_provider=execute_provider)
         result.update({
             "approval_required": probe.get("status") == "approval_required",
             "status": "ok" if probe.get("status") == "ok" else probe.get("status", "approval_required"),
@@ -8369,7 +8809,7 @@ def handle_request(
         })
     elif action == "skill_run":
         result["skill_policy"] = skill_run_policy()
-        if execute_skill and bool(payload.get("execute")):
+        if execute_skill and request_execute:
             run_result = run_activated_skill(payload, purpose)
             result.update({
                 "approval_required": False,
@@ -8548,7 +8988,7 @@ def handle_request(
         })
     elif action == "web_fetch":
         result["web_policy"] = web_fetch_policy()
-        if execute_web and bool(payload.get("execute")):
+        if execute_web and request_execute:
             fetch = execute_web_fetch(payload, purpose)
             result.update({
                 "approval_required": False,
@@ -8561,7 +9001,7 @@ def handle_request(
             result["message"] = "web_fetch requires --execute-web plus payload execute=true; otherwise this bridge records an API proposal only."
     elif action == "mcp_call":
         result["mcp_policy"] = mcp_call_policy()
-        if execute_mcp and bool(payload.get("execute")):
+        if execute_mcp and request_execute:
             call = execute_mcp_call(payload, purpose)
             result.update({
                 "approval_required": False,
@@ -8882,6 +9322,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if path == "/bridge":
                 body_payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
                 request_execute = bool(body.get("execute") or body_payload.get("execute"))
+                if bool(body.get("execute")) and isinstance(body_payload, dict) and not body_payload.get("execute"):
+                    body = {**body, "payload": {**body_payload, "_request_execute": True}}
                 gateway_execute_read = bool(getattr(self.server, "execute_read", False))
                 gateway_execute_command = bool(getattr(self.server, "execute_command", False))
                 gateway_execute_write = bool(getattr(self.server, "execute_write", False))
@@ -8904,7 +9346,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._send_json(200, handle_request(
                     body,
                     execute=execute_read,
-                    record=True,
+                    record=request_record_enabled(body, True),
                     execute_command=execute_command,
                     execute_write=execute_write,
                     execute_memory=execute_memory,
@@ -8928,6 +9370,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 params = body.get("params") if isinstance(body.get("params"), dict) else {}
                 arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
                 request_execute = bool(params.get("execute") or arguments.get("execute"))
+                if bool(params.get("execute")) and isinstance(arguments, dict) and not arguments.get("execute"):
+                    body = {
+                        **body,
+                        "params": {
+                            **params,
+                            "arguments": {**arguments, "_request_execute": True},
+                        },
+                    }
                 gateway_execute_read = bool(getattr(self.server, "execute_read", False))
                 gateway_execute_command = bool(getattr(self.server, "execute_command", False))
                 gateway_execute_write = bool(getattr(self.server, "execute_write", False))
@@ -9084,7 +9534,7 @@ def main() -> int:
         req = load_request(args)
         output = handle_request(
             req,
-            execute=args.execute,
+            execute=bool(args.execute or args.execute_read),
             record=False,
             execute_command=args.execute_command,
             execute_write=args.execute_write,

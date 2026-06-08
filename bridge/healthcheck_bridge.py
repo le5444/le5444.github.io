@@ -410,7 +410,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         )
         matrix = runtime.get("tool_matrix", [])
         matrix_actions = {item.get("action") for item in matrix if isinstance(item, dict)}
-        assert_true({"read_file", "write_file", "run_command", "skill_route", "skill_invoke", "skill_run", "scheduler_install", "web_fetch", "mcp_call", "mcp_stdio_catalog", "provider_catalog"}.issubset(matrix_actions), "runtime capabilities should expose the agent tool matrix")
+        assert_true({"read_file", "workspace_scan", "write_file", "run_command", "skill_route", "skill_invoke", "skill_run", "scheduler_install", "web_fetch", "mcp_call", "mcp_stdio_catalog", "provider_catalog"}.issubset(matrix_actions), "runtime capabilities should expose the agent tool matrix")
         assert_true("execute-skill" in str(runtime.get("capability_summary", {}).get("skills", "")), "runtime summary should expose gated activated skill runtime")
         assert_true("presets" in str(runtime.get("capability_summary", {}).get("provider_hub", "")), "runtime summary should expose Provider Hub")
         assert_true("registered" in str(runtime.get("capability_summary", {}).get("mcp_stdio", "")), "runtime summary should expose registered stdio MCP connectors")
@@ -437,6 +437,25 @@ def run_direct_checks() -> List[Dict[str, Any]]:
             "access_profile": "workspace",
         }, "healthcheck workspace read", execute_read=True)
         assert_true(read.get("status") == "ok" and content.strip() in read.get("content", ""), "read_file should read back workspace write")
+        dry_scan = direct_bridge_request("workspace_scan", {
+            "path": "bridge",
+            "execute": True,
+            "access_profile": "workspace",
+            "limit": 5,
+            "max_depth": 1,
+        }, "healthcheck workspace scan dry-run")
+        assert_true(dry_scan.get("status") == "dry_run", "workspace_scan should dry-run without execute_read")
+        scan = direct_bridge_request("workspace_scan", {
+            "path": "bridge",
+            "execute": True,
+            "access_profile": "workspace",
+            "limit": 8,
+            "max_depth": 1,
+        }, "healthcheck workspace scan", execute_read=True)
+        items = scan.get("workspace_scan", {}).get("items", [])
+        assert_true(scan.get("status") == "ok", "workspace_scan should execute when execute_read is enabled")
+        assert_true(isinstance(items, list), "workspace_scan should return an items list")
+        assert_true(all("content" not in item for item in items if isinstance(item, dict)), "workspace_scan items must not include file content")
         try:
             blocked_full = direct_bridge_request("read_file", {
                 "path": str(Path.home() / "zhimeng-full-access-probe.txt"),
@@ -446,11 +465,24 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         except ValueError as exc:
             blocked_full = {"status": "blocked", "error": str(exc)}
         assert_true("full_access" in json.dumps(blocked_full, ensure_ascii=False), "full_access should require explicit full_access_files")
+        try:
+            blocked_full_scan = direct_bridge_request("workspace_scan", {
+                "path": str(Path.home()),
+                "execute": True,
+                "access_profile": "full_access",
+                "limit": 5,
+                "max_depth": 0,
+            }, "healthcheck full access scan blocked", execute_read=True)
+        except ValueError as exc:
+            blocked_full_scan = {"status": "blocked", "error": str(exc)}
+        assert_true("full_access" in json.dumps(blocked_full_scan, ensure_ascii=False), "full_access workspace_scan should require explicit full_access_files")
         return {
             "path": rel_path,
             "dry_status": dry_write.get("status"),
             "write_status": executed.get("status"),
             "read_status": read.get("status"),
+            "scan_status": scan.get("status"),
+            "scan_items": len(items),
             "new_sha256": executed.get("write_file", {}).get("new_sha256"),
             "tool_matrix": sorted(matrix_actions),
         }

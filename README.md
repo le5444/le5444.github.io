@@ -1,6 +1,6 @@
 # 织梦写作台 / Zhimeng Writing Agent
 
-> 面向中文长篇小说创作的开源 AI Agent 工作台。它从写作编辑器出发，正在升级为一个可记忆、可审查、可迭代的 Personal Agent OS。
+> 面向中文长篇小说创作的开源 AI Agent 工作台。它把小说写作流程放进一个可记忆、可审查、可迭代的 Personal Agent OS / Agent IDE。
 
 [在线体验](https://le5444.github.io/) · [源码分支](https://github.com/le5444/le5444.github.io/tree/source) · [路线图](docs/Personal-OS-Roadmap.md)
 
@@ -8,28 +8,28 @@
 
 ## 一句话
 
-织梦写作台不是单纯的提示词网页，也不只是小说编辑器。它把长篇小说创作中的灵感、设定、人物、章节、正文、伏笔、风格、记忆、Skills、工具调用和审批流程组织成一个可长期陪跑的写作 Agent 工作台。
+织梦写作台不是单纯的提示词网页，也不只是小说编辑器。它以中文长篇小说创作为第一场景，把灵感、设定、人物、章节、正文、伏笔、风格、记忆、Skills、工具调用和审批流程组织成一个可长期陪跑的写作 Agent 工作台。
 
 当前产品形态分为两层：
 
-- **织梦 Writing Agent**：服务小说创作，负责章节树、富文本写作、提示词/Skills、反崩盘检查、蒸馏、素材和项目知识库。
-- **灵枢 LumenOS**：底层 Personal Agent OS，负责多工作区、线程、记忆、context_pack、Provider、Worker、Gateway、审批队列和受控工具调用。
+- **织梦 Writing Agent**：面向小说创作的专业 Agent 域，负责章节树、富文本写作、提示词/Skills、反崩盘检查、蒸馏、素材和项目知识库。
+- **灵枢 LumenOS**：承载织梦的底层 Personal Agent OS，负责多工作区、Agent 线程、记忆、context_pack、Provider、Worker、Gateway、审批队列和受控工具调用。
 
-简单说：**织梦是第一个专业 Agent 域，LumenOS 是承载它的本地 Agent 工作台。**
+简单说：**织梦是项目入口和写作主场，LumenOS 是让它变成长期 Agent 工作台的底盘。**
 
 ## 当前能力
 
-- **小说写作工作区**：管理作品、章节、正文、设定资料、分类、版本历史和写作统计。
-- **Agent 线程**：把任务、上下文附件、Worker 结果、审批 ID、Diff 和消息流沉淀到可恢复的本地线程。
-- **多工作区管理器**：支持工作区搜索、领域过滤、最近打开、跨工作区定位、线程空间和工作区检查器。
-- **上下文包 context_pack**：把当前任务、工作区摘要、最近文件、线程附件、记忆和 Skills 压成可审查上下文。
+- **小说写作工作区**：作为织梦 Writing Agent 域管理作品、章节、正文、设定资料、分类、版本历史和写作统计。
 - **小说 Skills 库**：内置中文网文、人物、剧情、世界观、写作、修订和蒸馏相关 Skill，并支持自定义 Skill。
 - **反崩盘系统**：围绕人物声音、连续性、伏笔、约束卡、成长弧线和 AI 痕迹做检查。
 - **蒸馏与对标**：从参考文本中提取节奏、场景功能、叙事机制和可复用技法，避免只停留在泛泛提示词。
-- **Memory Manager**：管理 L1/L2 记忆、证据、标签、冻结、软删除、备份和恢复草案。
-- **Provider/API 工作台**：管理 OpenAI-compatible 等模型配置、Provider 预设、探针草案、模型列表和本地配置档案。
+- **Agent 线程**：把任务、上下文附件、Worker 结果、审批 ID、Diff 和消息流沉淀到可恢复的本地线程。
+- **多工作区管理器**：支持工作区搜索、领域过滤、最近打开、跨工作区定位、线程空间和工作区检查器。
+- **上下文包 context_pack**：把当前任务、工作区摘要、最近文件、线程附件、记忆和 Skills 压成可审查上下文。
+- **Provider/API 工作台**：管理 OpenAI-compatible 等模型配置、Provider 预设、探针草案、实时模型列表和本地配置档案。
 - **Worker / Diff / Approval**：Worker 输出默认形成草案和 Diff；写文件、记忆修改、Provider probe 等动作进入审批队列。
 - **本地 Bridge / Gateway**：Python Bridge 提供健康检查、context_pack、memory、approval、provider、worker、MCP-like facade 等受控能力。
+- **Memory Manager**：管理 L1/L2 记忆、证据、标签、冻结、软删除、备份和恢复草案。
 - **PWA 部署**：线上版本可作为静态 PWA 打开和安装；完整本地 Agent 能力需要启动 Bridge。
 
 ## 工作台结构
@@ -38,7 +38,7 @@
 
 ```text
 Header            品牌、当前状态、刷新、源码入口、模型设置
-Activity Bar      Agent OS / 工作区 / 记忆 / Skills / 工具 / Worker
+Activity Bar      工作区 / Agent OS / 记忆 / Skills / 工具 / Provider / Worker / Specs / 写作
 Primary Sidebar   Agent 线程、工作区文件树、资源管理器
 Main Workspace    Agent 运行台、命令中心、Specs、Memory、Provider、Worker
 Secondary Sidebar 上下文、只读预览、Changes / Diff、运行审计
@@ -86,6 +86,12 @@ npm run build:pwa
 python bridge/zhimeng_bridge.py --serve
 ```
 
+启动带工作区文件和 Provider 模型列表探针的本地 Gateway：
+
+```bash
+python bridge/zhimeng_bridge.py --serve --execute-read --execute-write --execute-provider
+```
+
 运行 Bridge 健康检查：
 
 ```bash
@@ -128,7 +134,7 @@ https://github.com/le5444/le5444.github.io/tree/source
 
 - 文件写入默认进入 `write_file` 审批队列。
 - Memory 修改、冻结、删除、合并和恢复默认进入审批队列。
-- 远程模型探针需要 Provider/Gateway/请求级授权。
+- 远程模型探针需要 Provider/Gateway/请求级授权：Gateway 要开启 `--execute-provider`，请求仍要 `execute=true` 和 `allow_remote_model=true`。
 - MCP、Scheduler、Skill runtime 和命令执行都有独立 gate。
 - 任意 shell 不作为默认能力开放。
 - API key、个人记忆、运行日志、审批状态、构建产物和本地缓存默认不进入 Git。
