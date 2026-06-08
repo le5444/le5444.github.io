@@ -490,6 +490,7 @@ interface RuntimeLogEntry {
 }
 
 const GATEWAY_ORIGIN = "http://127.0.0.1:8765";
+const SOURCE_BRANCH_URL = "https://github.com/le5444/le5444.github.io/tree/source";
 const AGENT_THREADS_KEY = "lumenos-agent-threads";
 const AGENT_THREAD_SPACES_KEY = "lumenos-agent-thread-spaces";
 const RUNTIME_LOGS_KEY = "lumenos-runtime-logs";
@@ -1586,6 +1587,25 @@ function providerPresetRecord(preset: (typeof PROVIDER_PRESETS)[number]): JsonRe
     local: isLocalEndpoint(preset.apiUrl),
     key_optional: allowsEmptyApiKey(preset.apiUrl, preset.provider),
   };
+}
+
+function providerModelListFromProbe(result: JsonRecord) {
+  const parsed = asRecord(result.json);
+  const rawItems = asRecordList(parsed.data).length
+    ? asRecordList(parsed.data)
+    : asRecordList(parsed.models);
+  return rawItems.map((item, index) => {
+    const id = asString(item.id, asString(item.name, asString(item.model, `model-${index + 1}`)));
+    const ownedBy = asString(item.owned_by, asString(item.owner, asString(item.provider)));
+    const created = asNumber(item.created, 0);
+    return {
+      id,
+      label: asString(item.name, id),
+      ownedBy,
+      created,
+      record: item,
+    };
+  }).filter((item) => item.id);
 }
 
 function stableJobSuffix(text: string) {
@@ -4070,6 +4090,24 @@ export function AgentControlCenter({
   const providerActionPolicy = asRecord(providerActionResult.policy);
   const providerActionWorkerPayload = asRecord(providerActionResult.model_worker_payload);
   const providerActionEnv = asRecord(providerActionResult.env);
+  const providerActionModels = providerModelListFromProbe(providerActionResult);
+  const applyProviderActionModelToDraft = (modelId: string) => {
+    if (!modelId) return;
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      modelId,
+      modelName: prev.modelName.trim() ? prev.modelName : modelId,
+      status: "draft",
+      detail: `已从 Provider 模型列表填入模型 ID：${modelId}；尚未保存或激活。`,
+      at: Date.now(),
+    }));
+    appendRuntimeLog({
+      channel: "output",
+      title: "Provider 模型已填入草案",
+      detail: modelId,
+      status: "draft",
+    });
+  };
   const runProviderDraftStatus = () => {
     markProviderDraftReviewed("正在用配置草案请求 provider_status；这是只读检查，不访问模型端点。", "running");
     void runProviderAction("Provider 配置草案状态", "provider_status", providerDraftStatusPayload);
@@ -9800,6 +9838,34 @@ export function AgentControlCenter({
                     </div>
                   </div>
                 )}
+                {providerActionModels.length > 0 && (
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                    <SectionTitle icon={<ListChecks className="h-4 w-4 text-lime-300" />} title="模型列表" meta={`${providerActionModels.length} 个`} />
+                    <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                      来自 Provider `/models` 探针结果。点击模型只会填入当前配置草案，不保存配置、不调用模型。
+                    </p>
+                    <div className="mt-3 grid max-h-56 gap-2 overflow-auto pr-1 sm:grid-cols-2">
+                      {providerActionModels.slice(0, 40).map((model) => (
+                        <button
+                          key={model.id}
+                          type="button"
+                          onClick={() => applyProviderActionModelToDraft(model.id)}
+                          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                            providerConfigDraft.modelId === model.id
+                              ? "border-lime-500/40 bg-lime-500/10"
+                              : "border-slate-800 bg-slate-900/70 hover:border-lime-500/30 hover:bg-slate-900"
+                          }`}
+                        >
+                          <div className="truncate font-mono text-[11px] font-semibold text-slate-100">{model.id}</div>
+                          <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                            <span className="truncate">{model.ownedBy || "provider model"}</span>
+                            {model.created ? <span className="shrink-0">{formatDateTime(model.created * 1000)}</span> : null}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {Object.keys(providerActionWorkerPayload).length > 0 && (
                   <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
                     <SectionTitle icon={<Cpu className="h-4 w-4 text-fuchsia-300" />} title="Gateway 模型 Worker 载荷" meta="受控" />
@@ -10260,8 +10326,8 @@ export function AgentControlCenter({
             <Activity className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-white">灵枢 LumenOS</div>
-            <div className="truncate text-[10px] text-slate-500">个人 Agent OS · Codex / Claude Code 风格工作台</div>
+            <div className="truncate text-sm font-semibold text-white">织梦写作台</div>
+            <div className="truncate text-[10px] text-slate-500">小说 Agent 工作台 · LumenOS Personal Agent OS</div>
           </div>
         </div>
         <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 lg:flex">
@@ -10317,6 +10383,15 @@ export function AgentControlCenter({
             </button>
           </div>
           <ActionButton label="刷新" icon={<RefreshCw className={`h-3.5 w-3.5 ${state.loading ? "animate-spin" : ""}`} />} onClick={() => void refresh()} disabled={state.loading} />
+          <a
+            href={SOURCE_BRANCH_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100 transition-colors hover:border-cyan-400/50 hover:bg-cyan-500/15"
+          >
+            <LinkIcon className="h-3.5 w-3.5" />
+            源码
+          </a>
           <ActionButton label="打开工作区" icon={<ArrowUpRight className="h-3.5 w-3.5" />} onClick={() => { if (lastBook) onOpenBook(lastBook.id); else onCreateBook(); }} />
           <ActionButton label="模型设置" icon={<Settings className="h-3.5 w-3.5" />} onClick={onOpenSettings} />
         </div>
@@ -10365,8 +10440,24 @@ export function AgentControlCenter({
           </div>
           <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-3">
             <div className="text-[10px] uppercase tracking-[0.18em] text-cyan-300">目标模式</div>
-            <div className="mt-2 text-sm font-semibold text-white">个人超级 Agent OS</div>
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">写作 Agent 是可挂载的领域 Agent，不是产品边界。</p>
+            <div className="mt-2 text-sm font-semibold text-white">小说创作 Agent</div>
+            <p className="mt-1 text-xs leading-relaxed text-slate-400">织梦负责长篇小说工作流；LumenOS 承载记忆、工具、审批和多工作区运行。</p>
+          </div>
+          <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900 p-3">
+            <SectionTitle icon={<BookOpen className="h-4 w-4 text-fuchsia-300" />} title="项目入口" meta="Open Source" />
+            <div className="grid gap-2">
+              <MiniStat label="定位" value="写小说 Agent" tone="text-cyan-200" />
+              <MiniStat label="源码分支" value="source" tone="text-emerald-300" />
+            </div>
+            <a
+              href={SOURCE_BRANCH_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-100"
+            >
+              <LinkIcon className="h-3.5 w-3.5" />
+              查看 GitHub 源码
+            </a>
           </div>
           <nav className="mt-3 grid gap-1.5">
             {primaryNav.map((item) => (
