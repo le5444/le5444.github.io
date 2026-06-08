@@ -231,6 +231,7 @@
 81. 运行观察 / 自动同步首版已落地：底部“事件流”Panel 新增只读运行观察控制条，可按 5s / 15s / 30s 自动同步 `runtime_events`、`worker_status` 和 `approval_status`，也可手动“同步”；同步结果会刷新事件流、Worker 和审批状态，并合并进前端 runtime log。Gateway `/bridge` 支持请求级 `record=false`，因此这类订阅式轮询不会把自身写进 `bridge/runs` 刷屏；它不调用 Provider 探针、不运行模型、不写文件、不执行命令、不做审批决策。命令面板新增“开启/暂停运行观察”和“立即同步运行状态”，状态栏显示“观察 开/关”，让运行态更接近 Codex / Claude Code / VS Code 的底部运行面板。
 82. 运行事件增量游标首版已落地：Gateway `runtime_events` 新增 `after_epoch` / `after_id` 输入和 `cursor` / `latest` / `incremental` / `has_new` 输出，仍保留 `events/count/total/by_source/by_status` 兼容旧 UI。前端运行观察会在首次同步或完整刷新后建立游标，后续自动同步只请求新增事件，再与本地 runtime log 去重合并；面板显示“新增数、最近同步、游标时间、tick”，让事件流从“反复拉最近窗口”升级成更像 IDE runtime stream 的增量状态通道。该增量同步继续使用 `record=false`，不污染 runs，不触发模型、命令、写文件或审批执行。
 83. 运行事件长连接订阅首版已落地：Gateway 新增只读 `GET /runtime/stream` SSE 端点，按 `limit/interval/ticks/after_epoch/after_id` 推送 `hello`、`runtime_events` 和 `done` 事件，内部复用 `runtime_events` 增量游标协议，不写 `bridge/runs`，不触发任何执行门。前端运行观察开启时优先建立 EventSource 长连接，收到 `runtime_events` 后实时合并本地 runtime log 和游标；长连接结束或错误时自动关闭并回落到现有增量轮询。事件流面板新增“通道 长连接 / 轮询”提示，让底部运行面板更接近 Codex / Claude Code 式实时任务流。
+84. 设置弹窗模型发现入口已落地：`AI 模型设置` 里新增“模型发现”，用户只填 base URL 和 API key 即可通过 Gateway `provider_probe` 读取 OpenAI-compatible `/models`，结果可一键填入模型 ID 或保存为本地配置档案，体验更接近 cc-switch 的 base URL / key / model 管理流。该请求默认带 `record=false`，不写 `bridge/runs`；后端 `provider_probe` 现在还会对返回 URL、请求头和远端响应文本做二次脱敏，避免一次性 key 进入 UI、运行记录或构建产物。当前本机对 Codex2API 的真实探针路径已验证到 Gateway 和脱敏层，外网 HTTPS 握手在测试时返回 TLS EOF，需要在网络稳定后再复测模型列表内容。
 
 后续优先补：
 
@@ -239,7 +240,7 @@
 3. 继续把 `底部 Panel` 从本地 runtime log 流升级成真实可审查运行面板：allowlist 验证命令闭环、运行观察轻轮询、增量事件游标、SSE 长连接订阅、Worker/Gateway/审批统一事件流已落地，下一步是历史命令索引、stdout/stderr 更细分流和 Worker 任务时间线可视化。
 4. 把 `工作区文件树` 和 Multi Workspace Manager 从当前搜索/折叠/最近文件/只读预览/跳转编辑器/文件操作草案/分组归档草案/跨工作区定位/跨项目最近打开/虚拟路径索引/路径索引导出草案/工作区级 context_pack/历史版本/权限 profile/工作区 Skills 集继续升级成完整 Workspace Explorer：真实文件路径映射、多文件 diff、目录级批量草案、跨项目 context_pack 对比、项目独立记忆切片、真实根目录映射、profile/Skills 与 Gateway 执行门状态同步已落地首版，下一步是真实目录扫描审批草案和虚拟路径到本机路径的逐文件映射；写入继续走 approval。
 5. 升级 Memory Manager：Memory 专用审批执行器、备份历史、恢复草案、冻结/软删除视觉状态和 proposal diff 首版已落地，下一步补手动合并交互、历史版本对比、恢复后的可视化审计和订阅式审批状态流；当前执行仍需要 Gateway `--execute-memory` 与前端显式 execute。
-6. Provider/API 设置中心已具备配置草案、脱敏 payload、profile 持久化编辑/激活/删除、只读状态检查、探针审批草案、线程附件、`provider_probe` 审批执行门、Codex2API `/models` 拉取、模型 Worker 测试闭环和运行观察同步首版；下一步补更多 provider wire format 适配、模型能力标签、探针历史对比和长连接式审批状态流。
+6. Provider/API 设置中心已具备配置草案、脱敏 payload、profile 持久化编辑/激活/删除、设置弹窗模型发现、只读状态检查、探针审批草案、线程附件、`provider_probe` 审批执行门、Codex2API `/models` 拉取、模型 Worker 测试闭环和运行观察同步首版；下一步补更多 provider wire format 适配、模型能力标签、探针历史对比和长连接式审批状态流。
 7. Multi Workspace Manager 首版已具备搜索/领域过滤、检查器、线程空间、最近打开、跨工作区定位、安全边界说明、工作区级 context_pack、历史版本、权限 profile 和工作区 Skills 集；下一步补每个项目独立记忆切片、真实根目录映射、context_pack 版本对比、profile/Gateway 状态同步和跨项目 Skills 策略差异对比。
 8. Skills Market / Skill 路由管理首版已具备统一 Skill 库、搜索/领域过滤、路由预览、检查器、线程挂载和工作区启用/禁用策略；下一步补 Skill 历史版本、危险能力审计、Skill 包导入/导出、运行审批复核和按工作区策略自动解释路由原因。
 9. 真实 MCP transport / streaming。

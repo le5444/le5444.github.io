@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { Eye, EyeOff, Pencil, RotateCcw, Search, Settings, Sparkles, Trash2, Upload, X, Zap } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, ListChecks, Loader2, Pencil, RotateCcw, Search, Settings, Sparkles, Trash2, Upload, X, Zap } from "lucide-react";
 import { type ApiSettings, PROVIDER_LABELS, PROVIDER_PRESETS, allowsEmptyApiKey, inferProvider, type ProviderId } from "../store/settings";
 import { type BookProject } from "../store/library";
 import { type PromptTemplate, type WorkspaceFile } from "../store/workspace";
@@ -21,6 +21,17 @@ const providerGroupTabs = [
 ] as const;
 
 type ProviderGroupTab = (typeof providerGroupTabs)[number]["id"];
+type ModelDiscoveryStatus = "idle" | "running" | "ok" | "approval_required" | "http_error" | "network_error" | "error";
+
+interface ModelDiscoveryItem {
+  id: string;
+  displayName: string;
+  ownedBy: string;
+  type: string;
+  created: number;
+}
+
+const GATEWAY_BRIDGE_URL = "http://127.0.0.1:8765/bridge";
 
 const providerGroupLabel: Record<ProviderGroupTab, string> = providerGroupTabs.reduce(
   (acc, item) => ({ ...acc, [item.id]: item.label }),
@@ -35,14 +46,76 @@ function formatPresetHost(apiUrl: string) {
   }
 }
 
+function isLocalEndpoint(apiUrl: string) {
+  try {
+    const host = new URL(apiUrl).hostname.toLowerCase();
+    return ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function modelKeyEnv(provider: ProviderId) {
+  if (provider === "anthropic") return "ANTHROPIC_API_KEY";
+  if (provider === "gemini") return "GEMINI_API_KEY";
+  if (provider === "ollama") return "";
+  return "ZHIMENG_MODEL_API_KEY";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asRecordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(asRecord).filter((item) => Object.keys(item).length > 0) : [];
+}
+
+function asString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : value == null ? fallback : String(value);
+}
+
+function asNumber(value: unknown, fallback = 0) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function providerModelsFromGatewayResult(result: unknown): ModelDiscoveryItem[] {
+  const data = asRecord(result);
+  const probe = asRecord(data.provider_probe || data);
+  const json = asRecord(probe.json);
+  const rawItems = asRecordList(json.data).length ? asRecordList(json.data) : asRecordList(json.models);
+  return rawItems
+    .map((item, index) => {
+      const id = asString(item.id, asString(item.name, asString(item.model, `model-${index + 1}`))).trim();
+      const displayName = asString(item.display_name, asString(item.name, id)).trim();
+      return {
+        id,
+        displayName: displayName || id,
+        ownedBy: asString(item.owned_by, asString(item.owner, asString(item.provider, "provider"))),
+        type: asString(item.type, asString(item.object, "model")),
+        created: asNumber(item.created),
+      };
+    })
+    .filter((item) => item.id);
+}
+
 // Settings Modal
 export function SettingsModal({ open, settings, onClose, onSave }: { open: boolean; settings: ApiSettings; onClose: () => void; onSave: (next: ApiSettings) => void; }) {
   const [form, setForm] = useState<ApiSettings>(settings);
   const [showKey, setShowKey] = useState(false);
   const [presetSearch, setPresetSearch] = useState("");
   const [presetGroup, setPresetGroup] = useState<ProviderGroupTab>("all");
+  const [modelDiscoveryStatus, setModelDiscoveryStatus] = useState<ModelDiscoveryStatus>("idle");
+  const [modelDiscoveryMessage, setModelDiscoveryMessage] = useState("");
+  const [modelDiscoveryItems, setModelDiscoveryItems] = useState<ModelDiscoveryItem[]>([]);
   useEffect(() => { if (open) setForm(settings); }, [open, settings]);
   useEffect(() => { if (open) { setPresetSearch(""); setPresetGroup("all"); } }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    setModelDiscoveryStatus("idle");
+    setModelDiscoveryMessage("");
+    setModelDiscoveryItems([]);
+  }, [open, form.apiKey, form.apiUrl, form.provider]);
   const filteredPresets = useMemo(() => {
     const q = presetSearch.trim().toLowerCase();
     return PROVIDER_PRESETS.filter((preset) => {
@@ -83,6 +156,8 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
     }));
   };
   const profiles = form.profiles || [];
+  const modelDiscoveryNeedsRemoteAllow = !isLocalEndpoint(form.apiUrl);
+  const canDiscoverModels = Boolean(form.apiUrl.trim()) && (keyOptional || Boolean(form.apiKey.trim())) && modelDiscoveryStatus !== "running";
   const saveCurrentProfile = () => {
     if (!form.apiUrl.trim() || !form.modelId.trim()) {
       window.alert("请先填写端点 URL 和模型 ID。");
@@ -130,6 +205,91 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       profiles: (prev.profiles || []).filter((profile) => profile.id !== profileId),
       activeProfileId: prev.activeProfileId === profileId ? undefined : prev.activeProfileId,
     }));
+  };
+  const useDiscoveredModel = (model: ModelDiscoveryItem, saveProfile = false) => {
+    const modelName = model.displayName || model.id;
+    const nextProfileId = saveProfile ? (form.activeProfileId || `api-profile-${Date.now()}`) : form.activeProfileId;
+    setForm((prev) => {
+      const base = {
+        ...prev,
+        modelId: model.id,
+        modelName,
+        provider: effectiveProvider,
+        activeProfileId: nextProfileId,
+      };
+      if (!saveProfile) return base;
+      const snapshot = {
+        id: nextProfileId || `api-profile-${Date.now()}`,
+        name: `${modelName} · ${formatPresetHost(prev.apiUrl)}`,
+        apiUrl: prev.apiUrl,
+        apiKey: prev.apiKey,
+        modelId: model.id,
+        modelName,
+        provider: effectiveProvider,
+        temperature: prev.temperature,
+        maxTokens: prev.maxTokens,
+      };
+      const existing = prev.profiles || [];
+      const nextProfiles = existing.some((profile) => profile.id === snapshot.id)
+        ? existing.map((profile) => profile.id === snapshot.id ? snapshot : profile)
+        : [snapshot, ...existing].slice(0, 60);
+      return { ...base, profiles: nextProfiles, activeProfileId: snapshot.id };
+    });
+    setModelDiscoveryMessage(saveProfile ? `已选择并保存 ${model.id}，点击“保存设置”后生效。` : `已填入模型 ID：${model.id}`);
+  };
+  const discoverModels = async () => {
+    if (!form.apiUrl.trim()) {
+      setModelDiscoveryStatus("error");
+      setModelDiscoveryMessage("请先填写 base URL。");
+      return;
+    }
+    if (!keyOptional && !form.apiKey.trim()) {
+      setModelDiscoveryStatus("error");
+      setModelDiscoveryMessage("这个端点需要 API key，填入后再获取模型列表。");
+      return;
+    }
+    setModelDiscoveryStatus("running");
+    setModelDiscoveryMessage("正在通过 Gateway 读取 /models；不会调用模型生成。");
+    setModelDiscoveryItems([]);
+    try {
+      const res = await fetch(GATEWAY_BRIDGE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "provider_probe",
+          purpose: "Settings modal model discovery",
+          record: false,
+          payload: {
+            provider: effectiveProvider,
+            api_url: form.apiUrl,
+            model_id: form.modelId,
+            model_name: form.modelName,
+            api_key: form.apiKey,
+            api_key_env: modelKeyEnv(effectiveProvider),
+            execute: true,
+            allow_remote_model: modelDiscoveryNeedsRemoteAllow,
+            timeout_seconds: 12,
+          },
+        }),
+      });
+      const result = await res.json() as Record<string, unknown>;
+      if (!res.ok) throw new Error(asString(result.error, `${res.status} ${res.statusText}`));
+      const probe = asRecord(asRecord(result.result).provider_probe || result.provider_probe);
+      const status = asString(probe.status, asString(result.status, "error")) as ModelDiscoveryStatus;
+      const models = providerModelsFromGatewayResult(probe);
+      setModelDiscoveryStatus(status);
+      setModelDiscoveryItems(models);
+      if (status === "ok") {
+        setModelDiscoveryMessage(models.length ? `已获取 ${models.length} 个模型；选择一个填入当前配置。` : "请求成功，但没有解析到模型列表。");
+      } else if (status === "approval_required") {
+        setModelDiscoveryMessage(asString(probe.reason, "Gateway 未开启 --execute-provider，或远程探针未授权。"));
+      } else {
+        setModelDiscoveryMessage(asString(probe.reason, asString(probe.text, "模型列表获取失败。")).slice(0, 260));
+      }
+    } catch (error) {
+      setModelDiscoveryStatus("error");
+      setModelDiscoveryMessage(error instanceof Error ? error.message : "模型列表获取失败。");
+    }
   };
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 p-4">
@@ -295,6 +455,77 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                 <input type={showKey ? "text" : "password"} value={form.apiKey} onChange={(e) => setField("apiKey", e.target.value)} placeholder={effectiveProvider === "anthropic" ? "sk-ant-..." : "sk-..."} className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 pr-12 text-sm text-white outline-none focus:border-purple-500" />
                 <button onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
               </div>
+            </div>
+            <div className="md:col-span-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-medium text-cyan-200"><ListChecks className="h-4 w-4" /> 模型发现</div>
+                  <p className="mt-1 text-xs text-slate-500">按当前 base URL 和 API key 读取 `/models`，只获取模型名称，不调用模型生成。</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={discoverModels}
+                  disabled={!canDiscoverModels}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {modelDiscoveryStatus === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}
+                  获取模型列表
+                </button>
+              </div>
+              <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <span className="text-slate-500">端点</span>
+                  <div className="mt-1 truncate text-slate-200">{form.apiUrl ? formatPresetHost(form.apiUrl) : "未填写"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <span className="text-slate-500">API key</span>
+                  <div className={form.apiKey || keyOptional ? "mt-1 text-emerald-300" : "mt-1 text-amber-300"}>{form.apiKey ? "已填写" : keyOptional ? "可留空" : "必填"}</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+                  <span className="text-slate-500">远程授权</span>
+                  <div className={modelDiscoveryNeedsRemoteAllow ? "mt-1 text-blue-300" : "mt-1 text-emerald-300"}>{modelDiscoveryNeedsRemoteAllow ? "请求内显式允许" : "本地端点"}</div>
+                </div>
+              </div>
+              {modelDiscoveryMessage && (
+                <div className={`mt-3 rounded-xl border px-3 py-2 text-xs leading-relaxed ${
+                  modelDiscoveryStatus === "ok"
+                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+                    : modelDiscoveryStatus === "approval_required"
+                      ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
+                      : modelDiscoveryStatus === "running"
+                        ? "border-cyan-500/20 bg-cyan-500/10 text-cyan-200"
+                        : "border-red-500/20 bg-red-500/10 text-red-200"
+                }`}>
+                  {modelDiscoveryMessage}
+                </div>
+              )}
+              {modelDiscoveryItems.length > 0 && (
+                <div className="mt-3 grid max-h-56 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+                  {modelDiscoveryItems.slice(0, 60).map((model) => {
+                    const active = form.modelId === model.id;
+                    return (
+                      <div key={model.id} className={`rounded-2xl border p-3 ${active ? "border-cyan-400 bg-cyan-500/15" : "border-slate-800 bg-slate-950/45"}`}>
+                        <button type="button" onClick={() => useDiscoveredModel(model)} className="block w-full min-w-0 text-left">
+                          <div className="truncate text-sm font-medium text-white">{model.displayName || model.id}</div>
+                          <div className="mt-1 truncate font-mono text-[11px] text-cyan-300">{model.id}</div>
+                        </button>
+                        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                          <span className="truncate">{model.ownedBy} · {model.type}</span>
+                          {active && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />}
+                        </div>
+                        <div className="mt-3 flex gap-2">
+                          <button type="button" onClick={() => useDiscoveredModel(model)} className="rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-cyan-100 hover:border-cyan-500/40 hover:bg-cyan-500/10">
+                            填入
+                          </button>
+                          <button type="button" onClick={() => useDiscoveredModel(model, true)} className="rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-emerald-100 hover:border-emerald-500/40 hover:bg-emerald-500/10">
+                            保存档案
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-300">Temperature</label>

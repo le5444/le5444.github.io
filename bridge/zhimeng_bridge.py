@@ -959,6 +959,15 @@ def redact_url_secrets(value: str) -> str:
         return value
 
 
+def redact_inline_secret_values(value: str, secrets: List[str]) -> str:
+    redacted = value
+    for secret in secrets:
+        clean = str(secret or "").strip()
+        if len(clean) >= 6:
+            redacted = redacted.replace(clean, "[redacted]")
+    return redacted
+
+
 def redact_record_secrets(value: Any, key_hint: str = "") -> Any:
     if is_sensitive_record_key(key_hint):
         return "[redacted]" if value not in (None, "", False) else value
@@ -7380,11 +7389,12 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
         headers["anthropic-version"] = "2023-06-01"
     elif provider not in {"ollama", "gemini"} and api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    inline_secrets = [api_key]
     try:
         request = urllib.request.Request(url, data=body, headers=headers, method=request_method)
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             raw = response.read(20_000)
-            text = raw.decode("utf-8", errors="replace")
+            text = redact_inline_secret_values(raw.decode("utf-8", errors="replace"), inline_secrets)
             parsed: Any = None
             try:
                 parsed = json.loads(text) if text else None
@@ -7396,11 +7406,12 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
                     model_count = len(parsed.get("data") or [])
                 elif isinstance(parsed.get("models"), list):
                     model_count = len(parsed.get("models") or [])
+            safe_url = redact_url_secrets(url)
             return {
                 "status": "ok" if 200 <= int(response.status) < 400 else "http_error",
                 "purpose": purpose,
                 "config": config,
-                "url": url,
+                "url": safe_url,
                 "status_code": int(response.status),
                 "content_type": response.headers.get("Content-Type", ""),
                 "model_count": model_count,
@@ -7411,12 +7422,12 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
             }
     except urllib.error.HTTPError as exc:
         raw = exc.read(20_000)
-        text = raw.decode("utf-8", errors="replace")
+        text = redact_inline_secret_values(raw.decode("utf-8", errors="replace"), inline_secrets)
         return {
             "status": "http_error",
             "purpose": purpose,
             "config": config,
-            "url": url,
+            "url": redact_url_secrets(url),
             "status_code": int(exc.code),
             "reason": str(exc.reason),
             "text": text[:2000],
@@ -7428,7 +7439,7 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
             "status": "network_error",
             "purpose": purpose,
             "config": config,
-            "url": url,
+            "url": redact_url_secrets(url),
             "reason": str(exc.reason),
             "request_headers": redact_headers(headers),
             "policy": provider_registry_policy(),
