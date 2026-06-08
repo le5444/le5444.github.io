@@ -1959,7 +1959,7 @@ export function AIChatPanel({
   };
 
   const createGoalBootstrapBridgeRequest = () => {
-    const goal = input.trim() || "把织梦写作台升级为 Personal OS：具备上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治；小说只是其中一个领域代理。";
+    const goal = input.trim() || "把织梦写作台升级为长期写作 Agent 工作台：以小说创作为主场，复用 LumenOS 的上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治。";
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "goal_bootstrap",

@@ -141,12 +141,13 @@ https://github.com/le5444/le5444.github.io/tree/source
 
 ## 当前状态
 
-项目仍在快速迭代中。最近一轮重点是把“小说写作工具”升级为“Agent IDE / Personal Agent OS”：
+项目仍在快速迭代中。最近一轮重点是把“小说写作工具”升级为“Agent IDE / Personal Agent OS”，但公开入口仍然保持为 **织梦写作台 / Zhimeng Writing Agent**，LumenOS 作为底层运行层支撑它长期陪跑：
 
 - Agent OS 首屏工作台已替代旧书架首页。
 - Agent 线程、消息流、上下文附件和审批关联已落地。
 - Multi Workspace Manager、工作区 context_pack、权限 profile、工作区 Skills 集已落地。
 - Provider 配置草案、模型列表探针、Worker 载荷和审批执行门已落地。
 - Specs / Steering / Hooks 协议管理器、Changes / Diff、底部运行面板已进入首版。
+- 运行事件流、增量游标和 SSE 长连接观察已落地，用于只读串联 Gateway、Worker、审批和前端 runtime log。
 
 更完整的阶段规划见 [docs/Personal-OS-Roadmap.md](docs/Personal-OS-Roadmap.md)。

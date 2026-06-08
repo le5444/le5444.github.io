@@ -1,12 +1,12 @@
-# 灵枢 LumenOS 总规划
+# 织梦写作台 / LumenOS 总规划
 
 记录日期：2026-06-06
 
 ## Final Goal
 
-成品名暂定为 **灵枢 LumenOS**。它不再定位为单一的小说 Agent，也不是提示词网页。最终目标是一个本地 Personal Operating System：把上下文记忆、Skills、Tool Use、项目管理、长期记忆、模型 Provider、Worker、MCP/Gateway、安全审批和多工作区组织成一个可持续运行的个人超级 Agent。
+公开项目入口保持为 **织梦写作台 / Zhimeng Writing Agent**。底层运行层暂定为 **灵枢 LumenOS**：它让织梦不只是提示词网页或单点小说编辑器，而是把上下文记忆、Skills、Tool Use、项目管理、长期记忆、模型 Provider、Worker、MCP/Gateway、安全审批和多工作区组织成一个可持续运行的写作 Agent 工作台。
 
-**织梦** 保留为内置 Writing Agent / Writing Workspace 的名字。写作是第一个高价值 Agent 域。小说 Skills、织梦写作台、蒸馏、反崩盘、章节树都应该作为 Writing Workspace 存在；同一套 OS 还要能承载 coding、research、automation、knowledge、personal admin 等域。
+**织梦** 是公开产品名、写作入口和主场。小说 Skills、蒸馏、反崩盘、章节树、项目知识库都优先服务 Writing Agent；LumenOS 是底层 Agent OS / Agent IDE，可以继续扩展 coding、research、automation、knowledge、personal admin 等域。
 
 界面目标采用类似 VS Code / Codex / Claude Code 的三栏圣杯布局：
 
@@ -89,7 +89,7 @@
 
 ## Phase 3 - Skills and Domain Agents
 
-目标：Skills 变成 OS 的可路由能力层，写作只是其中一个 domain。
+目标：Skills 变成可路由能力层；写作域是织梦的主场，其他 domain 通过同一套底层协议挂载。
 
 交付物：
 
@@ -146,12 +146,12 @@
 
 ## Current Immediate Work
 
-当前立即止损方向已回正为 Agent IDE，而不是写作 dashboard：
+当前方向已回正为“织梦写作 Agent + LumenOS Agent IDE 底层”，不是普通写作 dashboard，也不是把写作入口弱化掉：
 
-1. 成品名定为 **灵枢 LumenOS**：中文产品名“灵枢”，英文/技术名 `LumenOS`；**织梦** 只保留为内置 Writing Agent / 写作工作区。
+1. 公开项目名保持为 **织梦写作台 / Zhimeng Writing Agent**；**灵枢 LumenOS** 作为英文/技术底层名，承载 Agent OS / Agent IDE 运行层。
 2. `HomePage` 已删除旧书架首页、写作追踪、Prompt 卡片库的首屏主场，只保留灵枢 LumenOS 的 Agent OS Shell。
 3. `AgentControlCenter` 已升级为全屏 IDE 工作台：Title/Menu Bar + Activity Bar + 主侧边栏 + 主工作区 / Agent 运行台 + 辅助侧边栏。
-4. Writing 能力继续保留，但只作为 `Writing Agent` / `Writing Workspace` 节点挂载在主侧边栏，不再定义整个产品。
+4. Writing 能力继续作为公开主场保留，并通过 `Writing Agent` / `Writing Workspace` 节点进入主侧边栏；LumenOS 负责底层工作台和运行协议。
 5. Main Content 已从静态 dashboard 升级为可切换 Agent Workbench：`Agent OS`、`Workspaces`、`Memory`、`Skills`、`Tools`、`Providers`、`Workers`、`Automation`、`Writing Agent` 都有独立主面板。
 6. 最新 UI 收口已把旧的能力矩阵/工具快照/领域路由大卡从 Agent OS 首屏移除；首屏应保持为“Agent 运行线程 + 命令中心 + 上下文检查器 + 运行轨迹/审批/证据/终端预览”的工作台形态。
 7. 多模态消息类型已开始接入：ChatMessage 可承载文本或图片内容，历史对话与聊天渲染已改为通过 `chatContentToText` 兼容。
@@ -212,7 +212,7 @@
 62. 工作区权限 profile 首版已落地：新增 `lumenos-workspace-permission-profiles` 本地策略表，Multi Workspace Manager 的工作区检查器可按项目设置读文件、写文件、终端命令、远程模型、MCP、Skill runtime、Scheduler 的策略级别（继承 / 允许 / 审批 / 禁用）和备注。该 profile 会注入工作区级 `context_pack`，也可挂入当前 Agent 线程作为 `thread_context`；它只声明工作区策略，不开启 Gateway execute flag，不绕过请求级 `execute=true`、`allow_remote_model` 或审批队列。
 63. Codex2API Provider 预设与模型列表闭环已落地：前端 `PROVIDER_PRESETS` 与 Gateway `PROVIDER_PRESETS` 新增 `Codex2API · gpt-5.3-codex`，Base URL 为 `https://www.codex2api.com/v1`，默认按 OpenAI-compatible wire format 处理；本地一次性 `provider_status` 识别为 key available，`provider_probe` 在 Gateway `--execute-provider`、payload `execute=true`、`allow_remote_model=true` 下成功访问 `/models`，返回 200 和 10 个模型（包含 `gpt-5.5`、`gpt-5.4`、`gpt-5.3-codex`、`codex-auto-review`、`gpt-image-*`）。Provider 中枢新增“实时获取模型列表”动作和脱敏 `execute=true` payload 预览，可在只填 endpoint 时拉取 `/models`，远程端点必须勾选授权且 Gateway 必须开启 `--execute-provider`；“生成探针审批”继续保持 `execute=false`，只生成审批草案。Provider 结果检查器会把探针返回的 `data/models` 解析成“模型列表”，展示 `display_name` / `type` / `owned_by`，点击模型可填入草案，也可保存为本地配置档案并激活；该动作不调用模型生成。API key 不写入源码、文档或预设，只能保存在本机设置/环境变量/一次性 payload。
 64. 工作区 Skills 集首版已落地：新增 `lumenos-workspace-skill-sets` 本地策略表，Multi Workspace Manager 的工作区检查器可按项目启用/禁用 Skill key、编辑备注、查看已解析/总数、从当前 Skill 检查器加入候选，并把整个工作区 Skills 集挂入当前 Agent 线程。该策略会注入工作区级 `context_pack` 与 `thread_context`，并将工作区启用集并入 snapshot 的 `activeSkillKeys`；它只声明默认上下文能力，不执行 Skill runtime，`skill_run` 仍必须经过 `--execute-skill` 与 `payload.execute=true`。
-65. 主外壳品牌纠偏已落地：浏览器标题、Open Graph、README 首屏和 `AgentControlCenter` Header 均改为 **灵枢 LumenOS / Personal Agent OS**，侧栏目标卡从“小说创作 Agent”改成个人超级 Agent 工作台说明；`Activity Bar` 补齐模型 Provider、Worker、规格 / 钩子、写作 Agent 等核心 View Container，`织梦` 仅作为内置 Writing Agent / 写作域保留。这样用户一打开页面看到的是 Agent IDE 外壳，而不是小说前端。
+65. 主外壳品牌纠偏已落地并再次校准：浏览器标题、Open Graph 和 README 首屏保持 **织梦写作台 / Zhimeng Writing Agent**，`AgentControlCenter` 说明 LumenOS 是底层 Agent OS / Agent IDE；`Activity Bar` 补齐模型 Provider、Worker、规格 / 钩子、写作 Agent 等核心 View Container。这样用户从 GitHub Pages 或 source 分支进入时，第一印象仍是写小说 Agent，深入后能看到支撑它长期运行的 Agent IDE 底盘。
 66. Agent 线程附件托盘首版已落地：`AgentThreadMessage` 新增本地 `attachments`，线程输入区支持添加图片和文本/代码/JSON/Markdown 等文件，图片在消息流内本地预览，文本类文件读取有限预览片段；附件受数量和体积上限限制，只进入浏览器本地线程记录，不上传、不写项目文件、不自动调用远程模型。发送并生成草案或模型 Worker 预检时，会把附件名称、类型、大小和文本片段写入任务摘要，并同步挂为 `thread_context` 文件附件，便于 context_pack / Worker 审查。
 67. 全局命令面板 / Quick Switcher 首版已落地：Header 新增“命令”入口，支持 `Ctrl/Cmd+K` 与 `Ctrl/Cmd+Shift+P` 打开；命令面板可搜索并执行主工作区 View Container 切换、底部 Panel 切换、新建 Agent 线程、生成 `context_pack` 任务草案、Provider 草案状态检查、Provider 探针审批草案和 Workbench 布局重置。结果按 `View / Panel / 动作 / 布局` 分组语义展示，支持上下键选择与 Enter 执行，执行记录写入本地 runtime log；它只触发已有受控入口，不绕过 Gateway、审批队列、远程模型授权或文件写入门。
 68. 主工作区 Editor Group 首版已落地：`lumenos-workbench-layout` 现在持久化 `editorTabs` 与 `activeEditorTabId`，旧布局会迁移为 Agent OS / 工作区 / 模型 Provider 三个默认标签；Activity Bar、主侧栏、命令面板和内部按钮切换 View 时会打开或激活对应 View 标签。工作区文件树、最近文件和跨工作区定位双击会在 Shell 内打开只读文件标签，展示虚拟路径、正文/图片元数据、工作区上下文和写入边界，并可从文件标签生成克隆/归档草案；关闭标签会回退到邻近标签。该 Editor Group 只负责定位、阅读和上下文承载，真实编辑/写入仍走 Workspace Explorer、Changes Diff 和 Gateway approval。
@@ -230,12 +230,13 @@
 80. Gateway 统一运行事件流首版已落地：新增只读 `runtime_events` action/MCP tool，合并 `bridge/runs`、`bridge/approvals` 与 `bridge/workers/worker-state.json` 的任务和事件，输出统一 `source/type/status/title/detail/ref/at` 结构，并继续复用记录层脱敏。Agent Control Center 刷新时会读取该事件流，底部 Panel 新增“事件流”标签，展示来源分布、状态分布和最近 Gateway/审批/Worker 轨迹，让 Provider 探针、模型 Worker、审批决策和工具调用能像 Codex / Claude Code 式工作台一样被串联审查。
 81. 运行观察 / 自动同步首版已落地：底部“事件流”Panel 新增只读运行观察控制条，可按 5s / 15s / 30s 自动同步 `runtime_events`、`worker_status` 和 `approval_status`，也可手动“同步”；同步结果会刷新事件流、Worker 和审批状态，并合并进前端 runtime log。Gateway `/bridge` 支持请求级 `record=false`，因此这类订阅式轮询不会把自身写进 `bridge/runs` 刷屏；它不调用 Provider 探针、不运行模型、不写文件、不执行命令、不做审批决策。命令面板新增“开启/暂停运行观察”和“立即同步运行状态”，状态栏显示“观察 开/关”，让运行态更接近 Codex / Claude Code / VS Code 的底部运行面板。
 82. 运行事件增量游标首版已落地：Gateway `runtime_events` 新增 `after_epoch` / `after_id` 输入和 `cursor` / `latest` / `incremental` / `has_new` 输出，仍保留 `events/count/total/by_source/by_status` 兼容旧 UI。前端运行观察会在首次同步或完整刷新后建立游标，后续自动同步只请求新增事件，再与本地 runtime log 去重合并；面板显示“新增数、最近同步、游标时间、tick”，让事件流从“反复拉最近窗口”升级成更像 IDE runtime stream 的增量状态通道。该增量同步继续使用 `record=false`，不污染 runs，不触发模型、命令、写文件或审批执行。
+83. 运行事件长连接订阅首版已落地：Gateway 新增只读 `GET /runtime/stream` SSE 端点，按 `limit/interval/ticks/after_epoch/after_id` 推送 `hello`、`runtime_events` 和 `done` 事件，内部复用 `runtime_events` 增量游标协议，不写 `bridge/runs`，不触发任何执行门。前端运行观察开启时优先建立 EventSource 长连接，收到 `runtime_events` 后实时合并本地 runtime log 和游标；长连接结束或错误时自动关闭并回落到现有增量轮询。事件流面板新增“通道 长连接 / 轮询”提示，让底部运行面板更接近 Codex / Claude Code 式实时任务流。
 
 后续优先补：
 
-1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步、运行观察轻轮询、增量事件游标、跨工作区 thread spaces 存储、write_file 授权执行闭环、Memory 授权执行闭环和多工作区管理器首版已落地，下一步是把运行观察升级为长连接事件流、更多专用审批执行器和多项目 thread space 持久化协议。
+1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步、运行观察轻轮询、增量事件游标、SSE 长连接事件流、跨工作区 thread spaces 存储、write_file 授权执行闭环、Memory 授权执行闭环和多工作区管理器首版已落地，下一步是更多专用审批执行器、多项目 thread space 持久化协议和任务状态协议收敛。
 2. 继续把 `Changes / Diff` 从单文件派生面板升级成完整多文件 diff 系统：多文件 proposal、真实文件路径映射、hunk 解释、回滚草案、历史 diff、与审批队列双向同步。
-3. 继续把 `底部 Panel` 从本地 runtime log 流升级成真实可审查运行面板：allowlist 验证命令闭环、运行观察轻轮询、增量事件游标、Worker/Gateway/审批统一事件流已落地，下一步是长连接式事件订阅、历史命令索引和 stdout/stderr 更细分流。
+3. 继续把 `底部 Panel` 从本地 runtime log 流升级成真实可审查运行面板：allowlist 验证命令闭环、运行观察轻轮询、增量事件游标、SSE 长连接订阅、Worker/Gateway/审批统一事件流已落地，下一步是历史命令索引、stdout/stderr 更细分流和 Worker 任务时间线可视化。
 4. 把 `工作区文件树` 和 Multi Workspace Manager 从当前搜索/折叠/最近文件/只读预览/跳转编辑器/文件操作草案/分组归档草案/跨工作区定位/跨项目最近打开/虚拟路径索引/路径索引导出草案/工作区级 context_pack/历史版本/权限 profile/工作区 Skills 集继续升级成完整 Workspace Explorer：真实文件路径映射、多文件 diff、目录级批量草案、跨项目 context_pack 对比、项目独立记忆切片、真实根目录映射、profile/Skills 与 Gateway 执行门状态同步已落地首版，下一步是真实目录扫描审批草案和虚拟路径到本机路径的逐文件映射；写入继续走 approval。
 5. 升级 Memory Manager：Memory 专用审批执行器、备份历史、恢复草案、冻结/软删除视觉状态和 proposal diff 首版已落地，下一步补手动合并交互、历史版本对比、恢复后的可视化审计和订阅式审批状态流；当前执行仍需要 Gateway `--execute-memory` 与前端显式 execute。
 6. Provider/API 设置中心已具备配置草案、脱敏 payload、profile 持久化编辑/激活/删除、只读状态检查、探针审批草案、线程附件、`provider_probe` 审批执行门、Codex2API `/models` 拉取、模型 Worker 测试闭环和运行观察同步首版；下一步补更多 provider wire format 适配、模型能力标签、探针历史对比和长连接式审批状态流。

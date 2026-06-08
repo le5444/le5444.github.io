@@ -4805,7 +4805,7 @@ def goal_subagent_specs(goal_id: str) -> List[Dict[str, Any]]:
             "label": "Skills 编排员",
             "mode": "forked-context",
             "allowed_tools": ["skill_route", "skill_invoke", "skill_crystallize", "skill_review"],
-            "mission": "按任务域挂载技能，小说只是其中一个域；技能启用必须经审查。",
+            "mission": "按任务域挂载技能；写作是织梦的主场，其他域通过同一套审查协议扩展。",
         },
         {
             "key": "source_researcher",
@@ -9269,11 +9269,60 @@ class GatewayHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8") if length else "{}"
         return json.loads(raw or "{}")
 
+    def _send_sse_event(self, event: str, payload: Dict[str, Any]) -> None:
+        data = json.dumps(payload, ensure_ascii=False)
+        packet = f"event: {event}\ndata: {data}\n\n".encode("utf-8")
+        self.wfile.write(packet)
+        self.wfile.flush()
+
+    def _handle_runtime_stream(self, query: Dict[str, List[str]]) -> None:
+        limit = max(1, min(int((query.get("limit") or ["40"])[0] or 40), 120))
+        interval = max(1, min(int((query.get("interval") or ["2"])[0] or 2), 10))
+        ticks = max(1, min(int((query.get("ticks") or ["15"])[0] or 15), 120))
+        after_epoch = parse_event_time((query.get("after_epoch") or ["0"])[0], 0)
+        after_id = str((query.get("after_id") or [""])[0] or "")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "content-type")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        cursor_epoch = after_epoch
+        cursor_id = after_id
+        self._send_sse_event("hello", {
+            "status": "ok",
+            "stream": "runtime_events",
+            "interval": interval,
+            "ticks": ticks,
+            "cursor": {"at_epoch": cursor_epoch, "id": cursor_id},
+        })
+        for tick in range(ticks):
+            payload = {"limit": limit, "after_epoch": cursor_epoch, "after_id": cursor_id}
+            events_payload = runtime_events(payload)
+            cursor = as_record(events_payload.get("cursor"))
+            cursor_epoch = float(cursor.get("at_epoch") or cursor_epoch or 0)
+            cursor_id = str(cursor.get("id") or cursor_id or "")
+            self._send_sse_event("runtime_events", {
+                "tick": tick + 1,
+                "runtime_events": events_payload,
+            })
+            time.sleep(interval)
+        self._send_sse_event("done", {
+            "status": "done",
+            "cursor": {"at_epoch": cursor_epoch, "id": cursor_id},
+        })
+
     def do_OPTIONS(self) -> None:
         self._send_json(200, {"status": "ok"})
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        parsed_query: Dict[str, List[str]] = {}
+        for key, value in parse_qsl(parsed_url.query, keep_blank_values=True):
+            parsed_query.setdefault(key, []).append(value)
         if path == "/health":
             self._send_json(200, {
                 "status": "ok",
@@ -9312,6 +9361,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"runs": recent_records("runs")})
         elif path == "/approvals":
             self._send_json(200, {"approvals": recent_records("approvals")})
+        elif path == "/runtime/stream":
+            try:
+                self._handle_runtime_stream(parsed_query)
+            except BrokenPipeError:
+                return
         else:
             self._send_json(404, {"status": "not_found", "path": path})
 

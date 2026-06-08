@@ -465,7 +465,7 @@ type BottomPanelTab = "terminal" | "events" | "output" | "problems" | "workers" 
 type RuntimeLogChannel = "terminal" | "events" | "output" | "problems" | "workers" | "gateway" | "approvals";
 type RuntimeLogStatusFilter = "all" | "issues" | "active";
 type RuntimeLogExportFormat = "jsonl" | "markdown";
-type RuntimeWatchStatus = "paused" | "watching" | "syncing" | "offline" | "error";
+type RuntimeWatchStatus = "paused" | "watching" | "syncing" | "streaming" | "offline" | "error";
 type ApprovalDetailTab = "proposal" | "request" | "result" | "decision";
 type AgentThreadScope = "current_workspace" | "all_workspaces" | "unbound";
 type AgentThreadContextKind = "workspace" | "file" | "memory" | "skill" | "context_pack" | "approval" | "worker" | "provider";
@@ -623,6 +623,7 @@ interface RuntimeWatchSnapshot {
   cursorEpoch: number;
   cursorId: string;
   newEventCount: number;
+  streamMode: "sse" | "poll";
   tickCount: number;
   errorCount: number;
 }
@@ -2503,7 +2504,7 @@ function bridgeAction(action: string, payload: JsonRecord = {}, options: { execu
 
 function statusTone(status: string) {
   const normalized = status.toLowerCase();
-  if (["ok", "pass", "completed", "executed", "running", "ready", "accepted", "proposal", "watching", "syncing"].includes(normalized)) return "text-emerald-300";
+  if (["ok", "pass", "completed", "executed", "running", "ready", "accepted", "proposal", "watching", "syncing", "streaming"].includes(normalized)) return "text-emerald-300";
   if (["partial", "pending", "queued", "draft", "approval_required", "modified", "paused"].includes(normalized)) return "text-amber-300";
   if (["missing", "blocked", "failed", "error", "rejected"].includes(normalized)) return "text-red-300";
   return "text-slate-300";
@@ -2551,6 +2552,7 @@ function statusLabel(status: string) {
     running: "运行中",
     saved: "已保存",
     syncing: "同步中",
+    streaming: "订阅中",
     setup: "待配置",
     "setup-needed": "需配置",
     "runtime-ready": "运行时就绪",
@@ -2938,12 +2940,14 @@ export function AgentControlCenter({
     cursorEpoch: 0,
     cursorId: "",
     newEventCount: 0,
+    streamMode: "poll",
     tickCount: 0,
     errorCount: 0,
   });
   const runtimeWatchBusyRef = useRef(false);
   const runtimeWatchLastStatusRef = useRef<RuntimeWatchStatus>(workbenchLayout.runtimeWatchEnabled ? "watching" : "paused");
   const runtimeWatchCursorRef = useRef<{ epoch: number; id: string }>({ epoch: 0, id: "" });
+  const runtimeWatchEventSourceRef = useRef<EventSource | null>(null);
   const [crossWorkspaceRecents, setCrossWorkspaceRecents] = useState<CrossWorkspaceRecentEntry[]>(loadCrossWorkspaceRecents);
   const [selectedExplorerFileId, setSelectedExplorerFileId] = useState<string | null>(null);
   const [selectedChangeFileId, setSelectedChangeFileId] = useState<string | null>(null);
@@ -3270,6 +3274,31 @@ export function AgentControlCenter({
     }));
   }, [updateWorkbenchLayout]);
 
+  const applyRuntimeEventsPayload = useCallback((runtimePayload: JsonRecord, mode: "sse" | "poll") => {
+    const runtimeEventEntries = asRecordList(runtimePayload.events)
+      .map(runtimeLogEntryFromGatewayEvent)
+      .filter((entry): entry is RuntimeLogEntry => Boolean(entry));
+    mergeRuntimeLogEntries(runtimeEventEntries);
+    const cursor = runtimeWatchCursorRef.current;
+    const latestEventId = runtimeEventEntries[0]?.id || "";
+    const runtimeCursor = asRecord(runtimePayload.cursor);
+    const runtimeLatest = asRecord(runtimePayload.latest);
+    const nextCursorEpoch = asNumber(runtimeCursor.at_epoch, asNumber(runtimeLatest.at_epoch, runtimeEventEntries[0]?.at ? runtimeEventEntries[0].at / 1000 : cursor.epoch));
+    const nextCursorId = asString(runtimeCursor.id, asString(runtimeLatest.id, latestEventId || cursor.id));
+    if (nextCursorEpoch || nextCursorId) runtimeWatchCursorRef.current = { epoch: nextCursorEpoch || cursor.epoch, id: nextCursorId || cursor.id };
+    const eventCount = asNumber(runtimePayload.count, runtimeEventEntries.length);
+    const incremental = asBoolean(runtimePayload.incremental);
+    setRuntimeWatch((prev) => ({
+      ...prev,
+      lastEventId: latestEventId || runtimeWatchCursorRef.current.id || prev.lastEventId,
+      cursorEpoch: runtimeWatchCursorRef.current.epoch || prev.cursorEpoch,
+      cursorId: runtimeWatchCursorRef.current.id || prev.cursorId,
+      newEventCount: incremental ? eventCount : prev.newEventCount,
+      streamMode: mode,
+    }));
+    return { entries: runtimeEventEntries, eventCount, incremental };
+  }, []);
+
   const refreshRuntimeStream = useCallback(async (reason = "watch") => {
     if (runtimeWatchBusyRef.current) return;
     runtimeWatchBusyRef.current = true;
@@ -3293,22 +3322,13 @@ export function AgentControlCenter({
       const successCount = results.filter((result) => result.data).length;
       const errors = results.filter((result) => result.error).map((result) => `${result.label}: ${result.error}`);
       const runtimePayload = asRecord(asRecord(byLabel.get("runtime")?.data).runtime_events);
-      const runtimeEventEntries = asRecordList(runtimePayload.events)
-        .map(runtimeLogEntryFromGatewayEvent)
-        .filter((entry): entry is RuntimeLogEntry => Boolean(entry));
-      mergeRuntimeLogEntries(runtimeEventEntries);
-      const latestEventId = runtimeEventEntries[0]?.id || "";
-      const runtimeCursor = asRecord(runtimePayload.cursor);
-      const runtimeLatest = asRecord(runtimePayload.latest);
-      const nextCursorEpoch = asNumber(runtimeCursor.at_epoch, asNumber(runtimeLatest.at_epoch, runtimeEventEntries[0]?.at ? runtimeEventEntries[0].at / 1000 : cursor.epoch));
-      const nextCursorId = asString(runtimeCursor.id, asString(runtimeLatest.id, latestEventId || cursor.id));
-      if (nextCursorEpoch || nextCursorId) runtimeWatchCursorRef.current = { epoch: nextCursorEpoch || cursor.epoch, id: nextCursorId || cursor.id };
+      const runtimeApplied = applyRuntimeEventsPayload(runtimePayload, "poll");
       const approvalPayload = asRecord(asRecord(byLabel.get("approval")?.data).approval_status);
       const workerPayload = asRecord(asRecord(byLabel.get("worker")?.data).workers);
       const queueCount = asNumber(approvalPayload.queue_count, asNumber(approvalPayload.pending_count));
       const jobs = asRecordList(workerPayload.jobs);
-      const eventCount = asNumber(runtimePayload.count, runtimeEventEntries.length);
-      const incremental = asBoolean(runtimePayload.incremental);
+      const eventCount = runtimeApplied.eventCount;
+      const incremental = runtimeApplied.incremental;
       const nextStatus: RuntimeWatchStatus = successCount > 0 ? "watching" : "offline";
       const detail = successCount > 0
         ? `同步 ${successCount}/${results.length} 项 · ${incremental ? "新增" : "事件"} ${eventCount} · Worker ${jobs.length} · 审批 ${queueCount}${errors.length ? ` · ${errors.join(" / ")}` : ""}`
@@ -3327,10 +3347,11 @@ export function AgentControlCenter({
         status: nextStatus,
         lastAt: startedAt,
         lastDetail: detail,
-        lastEventId: latestEventId || runtimeWatchCursorRef.current.id || prev.lastEventId,
+        lastEventId: runtimeWatchCursorRef.current.id || prev.lastEventId,
         cursorEpoch: runtimeWatchCursorRef.current.epoch || prev.cursorEpoch,
         cursorId: runtimeWatchCursorRef.current.id || prev.cursorId,
         newEventCount: incremental ? eventCount : prev.newEventCount,
+        streamMode: "poll",
         tickCount: prev.tickCount + 1,
         errorCount: nextStatus === "offline" ? prev.errorCount + 1 : prev.errorCount,
       }));
@@ -3371,7 +3392,87 @@ export function AgentControlCenter({
     } finally {
       runtimeWatchBusyRef.current = false;
     }
+  }, [applyRuntimeEventsPayload]);
+
+  const stopRuntimeEventStream = useCallback((detail = "运行观察长连接已关闭。") => {
+    runtimeWatchEventSourceRef.current?.close();
+    runtimeWatchEventSourceRef.current = null;
+    setRuntimeWatch((prev) => ({
+      ...prev,
+      streamMode: "poll",
+      status: prev.enabled ? "watching" : "paused",
+      lastDetail: detail,
+    }));
   }, []);
+
+  const startRuntimeEventStream = useCallback(() => {
+    if (typeof EventSource === "undefined") return false;
+    if (runtimeWatchEventSourceRef.current) return true;
+    const cursor = runtimeWatchCursorRef.current;
+    const url = new URL(`${GATEWAY_ORIGIN}/runtime/stream`);
+    url.searchParams.set("limit", "80");
+    url.searchParams.set("interval", "2");
+    url.searchParams.set("ticks", "60");
+    if (cursor.epoch) {
+      url.searchParams.set("after_epoch", String(cursor.epoch));
+      if (cursor.id) url.searchParams.set("after_id", cursor.id);
+    }
+    const source = new EventSource(url.toString());
+    runtimeWatchEventSourceRef.current = source;
+    setRuntimeWatch((prev) => ({
+      ...prev,
+      status: "streaming",
+      streamMode: "sse",
+      lastDetail: "运行观察长连接已建立，正在接收增量事件。",
+    }));
+    runtimeWatchLastStatusRef.current = "streaming";
+    source.addEventListener("hello", () => {
+      setRuntimeWatch((prev) => ({
+        ...prev,
+        status: "streaming",
+        streamMode: "sse",
+        lastDetail: "运行观察长连接已就绪。",
+      }));
+    });
+    source.addEventListener("runtime_events", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data || "{}") as JsonRecord;
+        const runtimePayload = asRecord(payload.runtime_events);
+        const applied = applyRuntimeEventsPayload(runtimePayload, "sse");
+        const detail = `长连接新增 ${applied.eventCount} · 游标 ${runtimeWatchCursorRef.current.epoch ? formatTime(runtimeWatchCursorRef.current.epoch * 1000) : "未建立"}`;
+        setState((prev) => ({
+          ...prev,
+          online: true,
+          refreshedAt: Date.now(),
+          runtime: {
+            ...(prev.runtime || {}),
+            runtime_events: runtimePayload,
+          },
+        }));
+        setRuntimeWatch((prev) => ({
+          ...prev,
+          status: "streaming",
+          lastAt: Date.now(),
+          lastDetail: detail,
+          cursorEpoch: runtimeWatchCursorRef.current.epoch || prev.cursorEpoch,
+          cursorId: runtimeWatchCursorRef.current.id || prev.cursorId,
+          newEventCount: applied.eventCount,
+          streamMode: "sse",
+          tickCount: prev.tickCount + 1,
+        }));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "运行观察长连接事件解析失败";
+        appendRuntimeLog({ channel: "events", title: "运行观察长连接解析失败", detail, status: "error" });
+      }
+    });
+    source.addEventListener("done", () => {
+      stopRuntimeEventStream("运行观察长连接本轮结束，已回到增量轮询兜底。");
+    });
+    source.onerror = () => {
+      stopRuntimeEventStream("运行观察长连接不可用，已回到增量轮询兜底。");
+    };
+    return true;
+  }, [applyRuntimeEventsPayload, stopRuntimeEventStream]);
 
   const clearRuntimeLogs = () => {
     const now = Date.now();
@@ -3925,24 +4026,31 @@ export function AgentControlCenter({
         ? (prev.lastDetail || "自动同步已开启。")
         : "自动同步已暂停。",
     }));
-    if (!workbenchLayout.runtimeWatchEnabled) runtimeWatchLastStatusRef.current = "paused";
+    if (!workbenchLayout.runtimeWatchEnabled) {
+      runtimeWatchLastStatusRef.current = "paused";
+      runtimeWatchEventSourceRef.current?.close();
+      runtimeWatchEventSourceRef.current = null;
+    }
   }, [workbenchLayout.runtimeWatchEnabled, workbenchLayout.runtimeWatchIntervalMs]);
 
   useEffect(() => {
     if (!workbenchLayout.runtimeWatchEnabled) return;
+    const streaming = startRuntimeEventStream();
     let stopped = false;
     const tick = () => {
       if (stopped) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (runtimeWatchEventSourceRef.current) return;
       void refreshRuntimeStream("watch");
     };
     const timer = window.setInterval(tick, workbenchLayout.runtimeWatchIntervalMs);
-    tick();
+    if (!streaming) tick();
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      stopRuntimeEventStream("运行观察已停止。");
     };
-  }, [refreshRuntimeStream, workbenchLayout.runtimeWatchEnabled, workbenchLayout.runtimeWatchIntervalMs]);
+  }, [refreshRuntimeStream, startRuntimeEventStream, stopRuntimeEventStream, workbenchLayout.runtimeWatchEnabled, workbenchLayout.runtimeWatchIntervalMs]);
 
   const runQuickAction = useCallback(async (label: string, action: string, payload: JsonRecord = {}) => {
     setQuickAction({ label, status: "running", detail: "执行中" });
@@ -7123,7 +7231,7 @@ export function AgentControlCenter({
     {
       label: "目标锁定",
       status: "completed",
-      detail: "灵枢 LumenOS 是 Personal Agent OS；织梦只是写作领域 Agent。",
+      detail: "织梦是写作入口和主场；灵枢 LumenOS 是支撑它长期运行的 Agent OS 底层。",
     },
     {
       label: "上下文装载",
@@ -7213,7 +7321,7 @@ export function AgentControlCenter({
     {
       label: "产品边界",
       status: "locked",
-      detail: "灵枢 LumenOS 是 Personal Agent OS；织梦只是可挂载的写作领域 Agent。",
+      detail: "织梦保持为公开产品入口，LumenOS 承担多工作区、记忆、工具和审批运行层。",
       path: ".lumen/steering/product.md",
     },
     {
@@ -7353,7 +7461,7 @@ export function AgentControlCenter({
       "## 验收要求",
       "- 首屏继续保持 VS Code / Codex / Claude Code 式 Agent Workbench，而不是写作前端。",
       "- 默认任务流是 Agent 线程、context_pack、工具计划、审批、Diff、终端和运行日志。",
-      "- 写作 Agent 只作为领域 Agent 挂载，不定义整个产品边界。",
+      "- 织梦保持写作 Agent 主入口，LumenOS 负责底层运行、上下文、工具和审批边界。",
       "- Specs / Steering / Hooks 只生成协议草案；落盘必须走 Gateway write_file 审批。",
       "- 远程模型、MCP、Scheduler、Skill runtime、命令执行和文件写入全部保留显式 gate。",
       "",
@@ -9618,7 +9726,7 @@ export function AgentControlCenter({
                   <span className="text-[10px] text-slate-600">只读同步事件 / Worker / 审批</span>
                 </div>
                 <div className="mt-1 line-clamp-1 text-[10px] text-slate-500">
-                  {runtimeWatch.lastDetail || "等待同步"} · 新增 {runtimeWatch.newEventCount} · 最近 {formatTime(runtimeWatch.lastAt)} · 游标 {runtimeWatch.cursorEpoch ? formatTime(runtimeWatch.cursorEpoch * 1000) : "未建立"} · tick {runtimeWatch.tickCount}
+                  {runtimeWatch.lastDetail || "等待同步"} · 通道 {runtimeWatch.streamMode === "sse" ? "长连接" : "轮询"} · 新增 {runtimeWatch.newEventCount} · 最近 {formatTime(runtimeWatch.lastAt)} · 游标 {runtimeWatch.cursorEpoch ? formatTime(runtimeWatch.cursorEpoch * 1000) : "未建立"} · tick {runtimeWatch.tickCount}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -10684,7 +10792,7 @@ export function AgentControlCenter({
         icon: <Library className="h-4 w-4" />,
         eyebrow: "Workspace Workbench",
         title: "多工作区管理器",
-        description: "用 VS Code 式 Workbench 管理项目边界、Agent 线程空间、最近文件、上下文附件和审批入口。织梦只是其中一个工作区，不再是产品外壳。",
+        description: "用 VS Code 式 Workbench 管理项目边界、Agent 线程空间、最近文件、上下文附件和审批入口；织梦仍是面向小说创作的公开入口。",
         status: `${workspaceManagerRows.length}/${allWorkspaceSummaries.length} 个工作区`,
         actions: (
           <>
@@ -12744,7 +12852,7 @@ export function AgentControlCenter({
         icon: <BookOpen className="h-4 w-4" />,
         eyebrow: "领域 Agent / 写作",
         title: "写作 Agent 工作区",
-        description: "写作 Agent 是灵枢 LumenOS 内的一个专业域，复用既有写作素材、蒸馏、Prompt 和 Skills，但不再定义整个产品外壳。",
+        description: "写作 Agent 是织梦的主场能力，复用灵枢 LumenOS 的记忆、审批、Worker 和 Skills 运行层来支撑长篇小说创作。",
         status: `${writingWorkspaces.length || allWorkspaceSummaries.length} 个写作空间`,
         actions: (
           <>
