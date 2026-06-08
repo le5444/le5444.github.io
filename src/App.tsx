@@ -39,6 +39,11 @@ export default function App() {
   const aiSkillAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => aiSkillAbortRef.current?.abort(), []);
 
+  const persistSettings = useCallback((next: ApiSettings) => {
+    setSettings(next);
+    saveSettings(next);
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => saveLibrary(library), 350);
     return () => window.clearTimeout(timer);
@@ -495,6 +500,7 @@ export default function App() {
           onDeleteBook={handleDeleteBook}
           onUsePromptWithAi={handleUsePromptWithAi}
           onOpenSettings={() => setShowSettings(true)}
+          onSettingsChange={persistSettings}
           onAiGeneratePrompt={handleAiGeneratePrompt}
           onCreatePrompt={handleCreatePrompt}
           onEditPrompt={handleEditPrompt}
@@ -559,7 +565,7 @@ export default function App() {
         open={showSettings}
         settings={settings}
         onClose={() => setShowSettings(false)}
-        onSave={(next) => { setSettings(next); saveSettings(next); }}
+        onSave={persistSettings}
       />
       <BookModal
         open={showBookModal}

@@ -4,7 +4,7 @@ import { type CommandDraft, type CommandValidationResult, validateCommandDraft }
 import { uid } from "./helpers";
 
 export type ExecutorBridgeMode = "dry-run" | "approval-required" | "disabled";
-export type ExecutorActionKind = "search" | "run" | "advance" | "status" | "approval_status" | "approval_decide" | "memory_event" | "memory_bootstrap" | "memory_consolidate" | "memory_status" | "memory_retrieve" | "context_pack" | "source_audit" | "source_digest" | "goal_bootstrap" | "skill_bootstrap" | "skill_route" | "skill_invoke" | "skill_crystallize" | "skill_review" | "skill_activate" | "skill_run" | "skill_status" | "scheduler_plan" | "scheduler_install" | "scheduler_uninstall" | "scheduler_status" | "worker_run" | "worker_status" | "worker_cancel" | "worker_merge_proposal" | "swarm_bootstrap" | "safety_review" | "sandbox_probe" | "sandbox_status" | "phase_audit" | "completion_audit" | "evolution_bootstrap" | "user_model_event" | "user_model_reflect" | "user_model_status" | "subagent_spawn" | "lock_acquire" | "lock_release" | "subagent_status" | "read_file" | "write_file" | "run_command" | "web_fetch" | "mcp_stdio_catalog" | "mcp_call" | "provider_catalog" | "provider_status" | "provider_probe" | "kairos_task" | "kairos_tick";
+export type ExecutorActionKind = "search" | "run" | "advance" | "status" | "approval_status" | "approval_decide" | "memory_event" | "memory_bootstrap" | "memory_consolidate" | "memory_status" | "memory_backup_status" | "memory_retrieve" | "memory_restore" | "context_pack" | "source_audit" | "source_digest" | "goal_bootstrap" | "skill_bootstrap" | "skill_route" | "skill_invoke" | "skill_crystallize" | "skill_review" | "skill_activate" | "skill_run" | "skill_status" | "scheduler_plan" | "scheduler_install" | "scheduler_uninstall" | "scheduler_status" | "worker_run" | "worker_status" | "worker_cancel" | "worker_merge_proposal" | "swarm_bootstrap" | "safety_review" | "sandbox_probe" | "sandbox_status" | "phase_audit" | "completion_audit" | "evolution_bootstrap" | "user_model_event" | "user_model_reflect" | "user_model_status" | "subagent_spawn" | "lock_acquire" | "lock_release" | "subagent_status" | "read_file" | "write_file" | "run_command" | "web_fetch" | "mcp_stdio_catalog" | "mcp_call" | "provider_catalog" | "provider_status" | "provider_probe" | "kairos_task" | "kairos_tick";
 export type ExecutorBridgeRequestStatus = "draft" | "submitted" | "completed" | "blocked" | "rejected";
 
 export interface ExecutorBridgeManifest {
@@ -35,18 +35,18 @@ export const DEFAULT_EXECUTOR_BRIDGE: ExecutorBridgeManifest = {
   mode: "dry-run",
   protocolVersion: "0.2",
   endpointHint: "http://127.0.0.1:8765/bridge",
-  allowedActions: ["search", "run", "advance", "status", "approval_status", "approval_decide", "memory_event", "memory_bootstrap", "memory_consolidate", "memory_status", "memory_retrieve", "context_pack", "source_audit", "source_digest", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_crystallize", "skill_review", "skill_activate", "skill_run", "skill_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "scheduler_status", "worker_run", "worker_status", "worker_cancel", "worker_merge_proposal", "swarm_bootstrap", "safety_review", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "evolution_bootstrap", "user_model_event", "user_model_reflect", "user_model_status", "subagent_spawn", "lock_acquire", "lock_release", "subagent_status", "read_file", "write_file", "run_command", "web_fetch", "mcp_stdio_catalog", "mcp_call", "provider_catalog", "provider_status", "provider_probe", "kairos_task", "kairos_tick"],
+  allowedActions: ["search", "run", "advance", "status", "approval_status", "approval_decide", "memory_event", "memory_bootstrap", "memory_consolidate", "memory_status", "memory_backup_status", "memory_retrieve", "memory_restore", "context_pack", "source_audit", "source_digest", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_crystallize", "skill_review", "skill_activate", "skill_run", "skill_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "scheduler_status", "worker_run", "worker_status", "worker_cancel", "worker_merge_proposal", "swarm_bootstrap", "safety_review", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "evolution_bootstrap", "user_model_event", "user_model_reflect", "user_model_status", "subagent_spawn", "lock_acquire", "lock_release", "subagent_status", "read_file", "write_file", "run_command", "web_fetch", "mcp_stdio_catalog", "mcp_call", "provider_catalog", "provider_status", "provider_probe", "kairos_task", "kairos_tick"],
   deniedActions: [],
   safety: [
     "浏览器前端不直接执行命令。",
     "前端只能提交 bridge-request；本地 Gateway 负责验证、记录和返回状态。",
     "run_command 必须先通过 23 个命令验证器；只有 Gateway 显式 --execute-command 且 payload.execute=true 时，才允许少量验证命令 allowlist 执行。",
     "write_file 默认生成 approval-draft；只有 Gateway 显式 --execute-write 且 payload.execute=true 时，才允许工作区写入，并自动备份。",
-    "approval_status 只读查看审批队列；approval_decide 只能拒绝审批，或在 Gateway --execute-write 下执行已排队的 write_file 审批。",
+    "approval_status 只读查看审批队列；approval_decide 只能拒绝审批，或在 Gateway --execute-write 下执行已排队的 write_file 审批，或在 --execute-memory 下执行已排队的 Memory 管理审批，或在 --execute-provider 下执行已排队的 provider_probe 审批。",
     "文件工具默认工作区沙箱；full_access 文件路径需要 Gateway --full-access-files 与 payload.access_profile=full_access。",
     "scheduler_install/scheduler_uninstall 默认只返回审批；只有 Gateway 显式 --execute-scheduler 且 payload.execute=true 时才会调用 Windows schtasks。",
     "mcp_call 默认只返回审批；只有 Gateway 显式 --execute-mcp 且 payload.execute=true 时才会调用 HTTP JSON-RPC MCP 端点或注册表内置 stdio MCP 服务。",
-    "provider_catalog/provider_status 只读模型供应商注册表；provider_probe 需要 payload.execute=true，远程端点还需要 allow_remote_model=true。",
+    "provider_catalog/provider_status 只读模型供应商注册表；provider_probe 默认只生成审批草案，审批后执行仍需要 Gateway --execute-provider、payload.execute=true，远程端点还需要 allow_remote_model=true。",
     "skill_route/skill_invoke 可以读取本地或内置 SKILL.md 作为指令上下文；skill_run 只有 Gateway 显式 --execute-skill 且 payload.execute=true 时才运行已激活脚本。",
     "模型 worker 只有 payload.execute_model=true 才调用 provider；远程端点还要 allow_remote_model=true，执行时走受控子进程，worker_cancel 只能终止已登记的 worker PID。",
     "所有外部动作写入 AgentRun 与 MEMORY.md。",
@@ -55,10 +55,10 @@ export const DEFAULT_EXECUTOR_BRIDGE: ExecutorBridgeManifest = {
 };
 
 function actionNeedsApproval(action: ExecutorActionKind) {
-  return ["approval_decide", "write_file", "run_command", "web_fetch", "mcp_call", "provider_probe", "kairos_task", "scheduler_install", "scheduler_uninstall", "skill_run"].includes(action);
+  return ["approval_decide", "memory_restore", "write_file", "run_command", "web_fetch", "mcp_call", "provider_probe", "kairos_task", "scheduler_install", "scheduler_uninstall", "skill_run"].includes(action);
 }
 
-const EXECUTOR_ACTIONS: ExecutorActionKind[] = ["search", "run", "advance", "status", "approval_status", "approval_decide", "memory_event", "memory_bootstrap", "memory_consolidate", "memory_status", "memory_retrieve", "context_pack", "source_audit", "source_digest", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_crystallize", "skill_review", "skill_activate", "skill_run", "skill_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "scheduler_status", "worker_run", "worker_status", "worker_cancel", "worker_merge_proposal", "swarm_bootstrap", "safety_review", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "evolution_bootstrap", "user_model_event", "user_model_reflect", "user_model_status", "subagent_spawn", "lock_acquire", "lock_release", "subagent_status", "read_file", "write_file", "run_command", "web_fetch", "mcp_stdio_catalog", "mcp_call", "provider_catalog", "provider_status", "provider_probe", "kairos_task", "kairos_tick"];
+const EXECUTOR_ACTIONS: ExecutorActionKind[] = ["search", "run", "advance", "status", "approval_status", "approval_decide", "memory_event", "memory_bootstrap", "memory_consolidate", "memory_status", "memory_backup_status", "memory_retrieve", "memory_restore", "context_pack", "source_audit", "source_digest", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_crystallize", "skill_review", "skill_activate", "skill_run", "skill_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "scheduler_status", "worker_run", "worker_status", "worker_cancel", "worker_merge_proposal", "swarm_bootstrap", "safety_review", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "evolution_bootstrap", "user_model_event", "user_model_reflect", "user_model_status", "subagent_spawn", "lock_acquire", "lock_release", "subagent_status", "read_file", "write_file", "run_command", "web_fetch", "mcp_stdio_catalog", "mcp_call", "provider_catalog", "provider_status", "provider_probe", "kairos_task", "kairos_tick"];
 
 function stripCodeFence(text: string) {
   return text
@@ -180,13 +180,13 @@ ${manifest.safety.map((item, index) => `${index + 1}. ${item}`).join("\n")}
 5. scheduler_install/scheduler_uninstall 只能安装/删除已登记的计划任务，且需要 --execute-scheduler + payload.execute=true。
 6. mcp_call 只调用 HTTP/HTTPS JSON-RPC MCP 端点或注册表内置 stdio MCP 服务，且需要 --execute-mcp + payload.execute=true；私网/localhost 端点还要 allow_private_network=true，stdio 不接受任意命令字符串。
 7. skill_route/skill_invoke 可以读取本地或内置 SKILL.md 指令；skill_run 只能运行已激活 Skill，且需要 --execute-skill + payload.execute=true。
-8. provider_catalog/provider_status 是只读 Provider 注册表；provider_probe 只能探测模型列表端点，且远程探测必须显式 allow_remote_model=true。
+8. provider_catalog/provider_status 是只读 Provider 注册表；provider_probe 只能探测模型列表端点，执行已排队探针仍需要 --execute-provider + execute=true，且远程探测必须显式 allow_remote_model=true。
 9. worker_run 的 model_task 需要 execute_model=true；远程模型还需要 allow_remote_model=true，执行时由 Gateway 子进程隔离，worker_cancel 只处理已登记 job_id。
 10. 当你需要本地工具时，输出以下 JSON 标签，除此之外不要伪造执行结果：
 
 <bridge-request>
 {
-  "action": "search | run | advance | status | approval_status | approval_decide | memory_event | memory_bootstrap | memory_consolidate | memory_status | memory_retrieve | context_pack | source_audit | source_digest | goal_bootstrap | skill_bootstrap | skill_route | skill_invoke | skill_crystallize | skill_review | skill_activate | skill_run | skill_status | scheduler_plan | scheduler_install | scheduler_uninstall | scheduler_status | worker_run | worker_status | worker_cancel | worker_merge_proposal | swarm_bootstrap | safety_review | sandbox_probe | sandbox_status | phase_audit | completion_audit | evolution_bootstrap | user_model_event | user_model_reflect | user_model_status | subagent_spawn | lock_acquire | lock_release | subagent_status | read_file | write_file | run_command | web_fetch | mcp_stdio_catalog | mcp_call | provider_catalog | provider_status | provider_probe | kairos_task | kairos_tick",
+  "action": "search | run | advance | status | approval_status | approval_decide | memory_event | memory_bootstrap | memory_consolidate | memory_status | memory_backup_status | memory_retrieve | memory_restore | context_pack | source_audit | source_digest | goal_bootstrap | skill_bootstrap | skill_route | skill_invoke | skill_crystallize | skill_review | skill_activate | skill_run | skill_status | scheduler_plan | scheduler_install | scheduler_uninstall | scheduler_status | worker_run | worker_status | worker_cancel | worker_merge_proposal | swarm_bootstrap | safety_review | sandbox_probe | sandbox_status | phase_audit | completion_audit | evolution_bootstrap | user_model_event | user_model_reflect | user_model_status | subagent_spawn | lock_acquire | lock_release | subagent_status | read_file | write_file | run_command | web_fetch | mcp_stdio_catalog | mcp_call | provider_catalog | provider_status | provider_probe | kairos_task | kairos_tick",
   "purpose": "为什么需要调用",
   "payload": {}
 }

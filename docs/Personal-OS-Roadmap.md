@@ -43,6 +43,13 @@
 - Kiro 官方文档把 Steering、Specs、Hooks、MCP 放进左侧 IDE 面板；灵枢的 Phase 2/5 要吸收“持久项目知识 + 规格化任务 + 可审查自动化”的产品形状。
 - 用户补充的桌面 IDE/AI 应用布局术语已作为产品语义校准：灵枢应持续使用 Workbench / Part / View Container / Editor Group / Panel / Statusbar / Auxiliary Side Bar 这一套架构词表；AI 能力应作为 Agent-Centric View Container，而不是写作卡片页。附件中关于具体商业产品实现的判断只作为布局观察，不作为源码事实或实现依赖。
 
+2026-06-08 公开参考校准：
+
+- OpenAI Codex 官方 AGENTS.md 文档确认“项目级指令文件”是 Agent 工作流的一等上下文；灵枢应继续把 `.lumen/*`、Steering、Skills、thread_context 和 context_pack 做成可审查、可追溯的上下文来源。
+- Anthropic Claude Code 官方 Hooks / Subagents 文档确认：Hook 事件、权限、子代理和 MCP 需要明确配置、可隔离上下文和可观察日志；灵枢只借鉴这种产品机制，不使用泄露代码。
+- Kiro 官方文档确认它的核心能力是 Specs、Steering、Hooks、Agentic Chat、MCP Servers；Steering 还支持 workspace/global scope、AGENTS.md 和多种 inclusion modes。灵枢的 Specs / Steering / Hooks 面板继续对标这个“规格化任务 + 项目知识 + 自动化闸门”模型。
+- GitHub 公开生态里已有 OpenCode、OpenClaw、AionUi、cmux 等围绕 AI coding agents 的会话、终端和工作区壳项目；灵枢可借鉴“多 Agent session / terminal / MCP / workspace”的产品形状，但代码实现仍以本仓库现有桥接层和审批门为准。
+
 ## Phase 1 - OS Shell and Goal Mode
 
 目标：先让产品一打开就是灵枢 LumenOS 的 Personal OS 运行台，而不是书架首页。
@@ -69,7 +76,7 @@
 交付物：
 
 - AutoDream L1/L2 六维记忆稳定可查看。
-- 长期记忆管理器：首版已支持 L1/L2 搜索、类型/维度筛选、详情检查、标签/证据展示、编辑/冻结/删除审阅草案；Gateway 已提供 `memory_update` / `memory_freeze` / `memory_delete` / `memory_merge` approval-only 管理门，默认只排队审批，不直接修改记忆；`approval_status` 可只读查看最近 approvals 记录。
+- 长期记忆管理器：首版已支持 L1/L2 搜索、类型/维度筛选、详情检查、标签/证据展示、冻结/软删除视觉状态、编辑/冻结/删除审阅草案、备份历史和恢复草案；Gateway 已提供 `memory_update` / `memory_freeze` / `memory_delete` / `memory_merge` / `memory_restore` approval-only 管理门，默认只排队审批，不直接修改记忆；`approval_status` 可只读查看最近 approvals 记录。
 - Context Pack：任务、相关文件、Skills、记忆摘要、工具边界统一打包。
 - SOUL / MEMORY / KAIROS / BRIDGE / COORDINATOR 工作区文件成为 OS 默认真值。
 - 用户偏好和项目事实必须带证据、置信度、时间。
@@ -150,7 +157,7 @@
 7. 多模态消息类型已开始接入：ChatMessage 可承载文本或图片内容，历史对话与聊天渲染已改为通过 `chatContentToText` 兼容。
 8. `BookProject` 仍作为历史存储类型保留，但首页和工作区创建弹窗已改为工作区 / 领域 Agent 语义；旧本地数据如“未命名作品 / 番茄小说”在 OS Shell 展示层映射为“未命名工作区 / 写作 Agent”，不直接篡改用户数据。
 9. Activity Bar、Primary Sidebar、Workbench Tabs 已真实联动 `activeView`；点击 Workspaces / Memory / Tools / Workers / Providers / Automation / Writing Agent 会切换 Main Content，而不是只做静态装饰。
-10. Provider view 已从模型目录页升级为“模型 Provider 中枢 / 模型运行时 / API Gateway”：展示当前运行时配置、凭据状态、Provider 闸门、已保存配置档案、前端预设库、模型 Worker 载荷，并提供“状态检查”“探针草案”“刷新目录”。
+10. Provider view 已从模型目录页升级为“模型 Provider 中枢 / 模型运行时 / API Gateway”：展示当前运行时配置、凭据状态、Provider 闸门、已保存配置档案、前端预设库、模型 Worker 载荷，并提供草案状态检查、探针审批草案和刷新目录。
 11. 运行时详情区已从 `Agent 详情中枢` 改名为“运行时检查器”，作为跨视图审计面板，不再像旧写作前端下方堆功能卡。
 12. 默认 `SYSTEM_PROMPT` 已从“织梦写作台中文小说写作助手”改为“灵枢 LumenOS 个人超级 Agent”；Writing Agent 规则只在写作域触发时作为专业子域规则。
 13. 中文优先收口已完成：顶部菜单、主侧边栏、主工作区、运行时检查器、Provider tab、辅助侧边栏均改为中文优先；保留 `Skills`、`tokens`、`Provider`、`Gateway`、`Worker` 等稳定技术词。
@@ -188,17 +195,33 @@
 45. Agent 线程跨工作区 thread spaces 独立存储首版已落地：新增 `lumenos-agent-thread-spaces` v1 索引，按 `workspace:<id>` / `unbound` 分桶保存线程，并从旧 `lumenos-agent-threads` 自动迁移；运行时仍展开为列表兼容现有 UI，侧边栏和线程管理器显示当前线程空间、space 数和各空间线程数，切换当前工作区时优先选择该 workspace 的可见线程。
 46. `规格 / 钩子` 控制面已落地：原“自动化”视图升级为 Kiro / Claude Code 风格的 Spec-driven Agent 面板，展示 Specs 工作流（Requirements / Design / Tasks / Review）、Steering 规则、Agent Hooks、MCP 治理、Subagents 和执行闸门。该面板只做策略、草案和审计展示，不会绕过 Gateway 审批或直接执行外部动作。
 47. Specs / Steering / Hooks 项目协议审批入口已落地：`规格 / 钩子` 面板新增“生成协议草案”和“提交写入审批”，会生成 `.lumen/specs/current/requirements.md`、`.lumen/specs/current/design.md`、`.lumen/specs/current/tasks.md`、`.lumen/steering/lumenos.md`、`.lumen/hooks/lumenos-hooks.md` 五个 Markdown 草案，并逐个调用 Gateway `write_file`。请求不带 `execute=true`，因此默认只进入 approval queue；审批 ID 会回写当前 Agent 线程和底部审批复核台。
-48. 审批复核台已接入 `approval_decide` 决策闭环：Gateway 现在可对单条 approval 记录写入 `decision`，支持拒绝审批，或在 Gateway `--execute-write` 与前端显式 execute 请求同时满足时执行已排队的 `write_file` 审批；前端复核台新增“拒绝审批”“执行 write_file”和 `Decision 决策` 详情页签，结果会进入底部审批日志和当前 Agent 线程。该执行器 v1 不执行任意 action，只处理 `write_file`，Memory / Provider / MCP / Scheduler 仍保留后续专用执行门。
+48. 审批复核台已接入 `approval_decide` 决策闭环：Gateway 现在可对单条 approval 记录写入 `decision`，支持拒绝审批，或在 Gateway `--execute-write` 与前端显式 execute 请求同时满足时执行已排队的 `write_file` 审批；也支持在 Gateway `--execute-memory` 下执行 `memory_update` / `memory_freeze` / `memory_delete` / `memory_merge` / `memory_restore`，以及在 Gateway `--execute-provider` 下执行已排队的 `provider_probe`。前端复核台新增“拒绝审批”“执行 write_file / Memory / Provider probe”和 `Decision 决策` 详情页签，结果会进入底部审批日志和当前 Agent 线程。执行器 v1 仍不执行任意 action；MCP / Scheduler 继续保留各自专用执行门。
+49. Memory Manager 已补齐备份历史和恢复审批草案：Gateway 新增 `memory_backup_status` 只读快照与 `memory_restore` 审批门，恢复执行仍必须通过 `approval_decide`、Gateway `--execute-memory` 和前端显式 execute；前端刷新流会拉取最近 AutoDream 备份，Memory view 展示备份列表、当前状态文件、恢复闸门、冻结/软删除/合并状态徽标和 `Diff 预览`，可从备份生成 `memory_restore` 恢复草案并提交 approvals，不会直接覆盖记忆。
+50. Specs / Steering / Hooks 已从“生成入口”升级为协议管理器首版：前端可通过 Gateway `read_file` 只读同步 `.lumen/specs/current/requirements.md`、`design.md`、`tasks.md`、`.lumen/steering/lumenos.md` 和 `.lumen/hooks/lumenos-hooks.md`，不存在时显示未落地；同屏展示当前草案、现有协议状态、字符数变化和 `协议 Diff 审查`，再通过 `write_file` 审批提交。该流程继续保持 Kiro 式 Specs / Steering / Hooks 与 Claude Code 式可审查规则，不直接创建目录、不直接写入、不启用后台 hook。
+51. Workspace Explorer 已新增文件操作草案：在辅助侧边栏的只读文件预览中，可生成 `新建草案`、`克隆草案`、`归档快照`，目标统一落在 `workspace-drafts/*` 下，并通过 Gateway `write_file` 进入审批队列；请求不带 `execute=true`，因此不会直接修改当前工作区、不会重命名/删除原文件。审批 ID 会进入底部审批复核台和当前 Agent 线程，保持 VS Code 文件树 + Codex/Claude Code 审批式改动流。
+52. Workspace Explorer 已新增分组归档草案：可从当前选中文件所在分类聚合多个文件，生成 `workspace-drafts/<workspace>/archive/*-category-*.md` 批量快照草案；提交仍只走 Gateway `write_file` approval queue，不移动、不删除、不批量改写真实工作区文件。这是目录级/批量操作的安全雏形，后续再扩展为真实目录树操作与多文件 diff。
+53. Workspace Explorer 已新增跨工作区定位器：主侧边栏文件树下方可按同一搜索词检索全库文件，显示来源工作区、分类、更新时间和字数；点击当前工作区文件会选中预览，点击外部结果会通过现有编辑器入口打开目标工作区文件，不写入文件、不生成审批、不改变真实目录。这让资源管理器更接近 VS Code / Codex 的全局项目导航，而不是单一写作项目侧栏。
+54. Workspace Explorer 已新增跨项目最近打开历史：通过本地 `lumenos-cross-workspace-recents` 只保存 `bookId/fileId/openedAt`，从当前 Library 反解标题和工作区信息；打开任意工作区文件会进入最近列表，后续可快速跳回，不复制正文、不写项目文件、不修改审批队列。
+55. Workspace Explorer 已新增项目级虚拟文件路径索引：从当前 Library 派生 `<workspace>/<category>/<title>.md` 或图片扩展路径，不改旧数据结构；当前文件树、最近文件、跨项目最近打开、跨工作区定位、只读预览和归档/克隆草案都会展示或写入该虚拟路径，搜索也能按路径匹配。这为后续真实文件路径映射、多文件 diff 和目录级操作打底。
+56. Workspace Explorer 已新增路径索引导出草案：在只读文件预览的文件操作草案中可生成 `workspace-drafts/<workspace>/indexes/file-path-index-*.md`，内容是虚拟路径、分类、类型、字数、更新时间和版本数的 Markdown 索引表；提交仍只走 `write_file` approval queue，不创建真实目录、不复制正文、不修改工作区文件。
+57. Provider/API 设置中心闭环首版已落地：`Provider 配置草案` 可从当前 API 设置、保存档案或前端/Gateway 预设载入，支持编辑 endpoint、Provider 类型、模型 ID、显示名、temperature、Max tokens 和探针超时；同屏展示脱敏运行时 payload、探针审批 payload 和模型 Worker payload。Provider workbench 已复用 `novelsmith-api-settings` / `ApiSettings.profiles` 完成本地配置档案保存、保存并激活、载入草案、激活和删除；手动改 endpoint / Provider / 模型 ID 会清掉旧档案来源，避免误覆盖。草案状态检查调用只读 `provider_status`，探针按钮调用默认不带 `execute=true` 的 `provider_probe`，只生成审批草案；审批复核台现在可在 Gateway `--execute-provider` 与前端显式 execute 同时满足时执行已排队的 `provider_probe`，且只探测模型列表端点，远程端点仍必须 `allow_remote_model=true`。草案可挂入当前 Agent 线程作为 `thread_context` 附件；页面不渲染明文 API key，保存档案只更新本地浏览器设置，不访问模型端点。
+58. Skills 库 / 路由管理器首版已落地：Skills 视图不再只是最近候选/已激活/根目录状态卡，而是统一展示 Codex 用户 Skills、Agents 用户 Skills、Codex 内置 Skills、OpenAI Bundled Skills、AutoDream 候选/已激活 Skills 和 `skill_route` 返回的 core/local/isolated Skills。支持搜索名称/路径/标签/root，按领域 scope 过滤，运行只读路由预览，查看 `active_core_skills`、`active_local_skills`、`isolated_skills`、schema.execution 和安全说明；选中 Skill 可进入 Skill 检查器并挂入当前 Agent 线程作为 `thread_context`。该流程只读取 SKILL.md 指令和 Gateway 元数据，不执行脚本；`skill_run` 仍保留 `--execute-skill` + `payload.execute=true` gate。
+59. Multi Workspace Manager 首版已落地：`工作区` 视图从简单卡片升级为多工作区管理器，提供工作区搜索、领域过滤、工作区列表、工作区检查器、工作区线程空间、最近打开、跨工作区定位、线程空间索引、容量统计和 fail-closed 边界说明。每个工作区展示文件/字数/分组、活跃线程、上下文附件、审批数、最近文件和最近打开；可打开工作区、进入 Agent 线程空间、把当前线程绑定到当前工作区。所有文件操作仍复用 Workspace Explorer 的 `write_file` approval queue，不直接写入、不复制正文、不移动文件。
+60. 工作区级 `context_pack` 首版已落地：Multi Workspace Manager 的工作区检查器新增 `工作区 context_pack` 面板，可把当前工作区摘要、最近文件、活跃线程、已有 thread_context、记忆和 Skills 路由压成只读上下文包；在线时调用 Gateway `context_pack`，离线或失败时降级为本地只读草案。面板展示上下文切片、线程上下文数量、active Skills 和工具排除项，并可把生成结果挂入当前 Agent 线程作为 `thread_context` 附件；不写文件、不运行 Skill、不访问远程模型。
+61. 工作区级 `context_pack` 历史版本首版已落地：新增 `lumenos-workspace-context-pack-history` 本地历史，成功生成或降级生成的工作区上下文包会保存最近 40 条；工作区检查器展示当前工作区最近 5 条历史版本，可一键恢复到当前预览，也可直接挂载到当前 Agent 线程。历史只保存上下文切片、Skills、工具排除和请求/结果摘要，不写入工作区文件、不执行审批、不复制真实目录。
+62. 工作区权限 profile 首版已落地：新增 `lumenos-workspace-permission-profiles` 本地策略表，Multi Workspace Manager 的工作区检查器可按项目设置读文件、写文件、终端命令、远程模型、MCP、Skill runtime、Scheduler 的策略级别（继承 / 允许 / 审批 / 禁用）和备注。该 profile 会注入工作区级 `context_pack`，也可挂入当前 Agent 线程作为 `thread_context`；它只声明工作区策略，不开启 Gateway execute flag，不绕过请求级 `execute=true`、`allow_remote_model` 或审批队列。
+63. Codex2API Provider 预设与模型列表实测已落地：前端 `PROVIDER_PRESETS` 与 Gateway `PROVIDER_PRESETS` 新增 `Codex2API · gpt-5.3-codex`，Base URL 为 `https://www.codex2api.com/v1`，默认按 OpenAI-compatible wire format 处理；本地一次性 `provider_status` 识别为 key available，`provider_probe` 在 Gateway `--execute-provider`、payload `execute=true`、`allow_remote_model=true` 下成功访问 `/models`，返回 200 和 10 个模型（包含 `gpt-5.5`、`gpt-5.4`、`gpt-5.3-codex`、`codex-auto-review`、`gpt-image-*`）。API key 不写入源码、文档或预设，只能保存在本机设置/环境变量/一次性 payload。
+64. 工作区 Skills 集首版已落地：新增 `lumenos-workspace-skill-sets` 本地策略表，Multi Workspace Manager 的工作区检查器可按项目启用/禁用 Skill key、编辑备注、查看已解析/总数、从当前 Skill 检查器加入候选，并把整个工作区 Skills 集挂入当前 Agent 线程。该策略会注入工作区级 `context_pack` 与 `thread_context`，并将工作区启用集并入 snapshot 的 `activeSkillKeys`；它只声明默认上下文能力，不执行 Skill runtime，`skill_run` 仍必须经过 `--execute-skill` 与 `payload.execute=true`。
 
 后续优先补：
 
-1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步、跨工作区 thread spaces 存储和 write_file 授权执行闭环首版已落地，下一步是真实订阅式 approval/worker 状态流、更多专用审批执行器和多项目 thread space 管理器。
+1. 继续把 `Agent 线程` 从本地会话系统升级到真实任务协议：线程搜索/空间过滤/导出/删除/分支、上下文附件、审批关联、context_pack 协议注入、模型 Worker 请求注入、事件流 UI、流式回复原地更新、审批状态刷新同步、跨工作区 thread spaces 存储、write_file 授权执行闭环、Memory 授权执行闭环和多工作区管理器首版已落地，下一步是真实订阅式 approval/worker 状态流、更多专用审批执行器和多项目 thread space 持久化协议。
 2. 继续把 `Changes / Diff` 从单文件派生面板升级成完整多文件 diff 系统：多文件 proposal、真实文件路径映射、hunk 解释、回滚草案、历史 diff、与审批队列双向同步。
 3. 继续把 `底部 Panel` 从本地 runtime log 流升级成真实可审查运行面板：allowlist 验证命令闭环已落地，下一步是 Worker/Gateway 事件订阅、历史命令索引和 stdout/stderr 更细分流。
-4. 把 `工作区文件树` 从当前搜索/折叠/最近文件/只读预览/跳转编辑器继续升级成完整 Workspace Explorer：目录级操作、文件操作草案、跨项目定位；写入继续走 approval。
-5. 升级 Memory Manager：补 memory proposal diff、Memory 专用审批执行器和手动合并交互；当前通用 approval 执行器 v1 只处理 write_file，Memory 管理门仍是 approval-only。
-6. Provider/API 设置中心的 profile 编辑、live status/probe 执行授权流和模型 worker 测试闭环。
-7. Multi Workspace Manager：每个项目独立 workspace、记忆、Skills、权限 profile。
-8. Skills Market / Skill 路由管理。
+4. 把 `工作区文件树` 和 Multi Workspace Manager 从当前搜索/折叠/最近文件/只读预览/跳转编辑器/文件操作草案/分组归档草案/跨工作区定位/跨项目最近打开/虚拟路径索引/路径索引导出草案/工作区级 context_pack/历史版本/权限 profile/工作区 Skills 集继续升级成完整 Workspace Explorer：真实文件路径映射、多文件 diff、目录级批量草案、跨项目 context_pack 对比、项目独立记忆切片、真实根目录映射以及 profile/Skills 与 Gateway 执行门的状态同步；写入继续走 approval。
+5. 升级 Memory Manager：Memory 专用审批执行器、备份历史、恢复草案、冻结/软删除视觉状态和 proposal diff 首版已落地，下一步补手动合并交互、历史版本对比、恢复后的可视化审计和订阅式审批状态流；当前执行仍需要 Gateway `--execute-memory` 与前端显式 execute。
+6. Provider/API 设置中心已具备配置草案、脱敏 payload、profile 持久化编辑/激活/删除、只读状态检查、探针审批草案、线程附件和 `provider_probe` 审批执行门首版；下一步补真实 live probe 结果复核、模型 worker 测试闭环和订阅式审批状态流。
+7. Multi Workspace Manager 首版已具备搜索/领域过滤、检查器、线程空间、最近打开、跨工作区定位、安全边界说明、工作区级 context_pack、历史版本、权限 profile 和工作区 Skills 集；下一步补每个项目独立记忆切片、真实根目录映射、context_pack 版本对比、profile/Gateway 状态同步和跨项目 Skills 策略差异对比。
+8. Skills Market / Skill 路由管理首版已具备统一 Skill 库、搜索/领域过滤、路由预览、检查器、线程挂载和工作区启用/禁用策略；下一步补 Skill 历史版本、危险能力审计、Skill 包导入/导出、运行审批复核和按工作区策略自动解释路由原因。
 9. 真实 MCP transport / streaming。
-10. Specs / Steering / Hooks 下一步从“审批入口”升级为完整协议管理器：读取现有 `.lumen/*`、显示历史版本、做 diff/merge，并在用户批准后执行写入。
+10. Specs / Steering / Hooks 协议管理器首版已能读取现有 `.lumen/*` 并做草案 diff；下一步补历史版本索引、协议文件树、逐文件接受/拒绝、merge 策略和 hook 启用审批。

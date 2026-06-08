@@ -12,6 +12,7 @@ export function HomePage({
   onOpenBookFile,
   onCreateBook,
   onOpenSettings,
+  onSettingsChange,
   onOpenOverview,
   onOpenDistillation,
 }: {
@@ -28,6 +29,7 @@ export function HomePage({
   onDeleteBook: (id: string) => void;
   onUsePromptWithAi: (text: string) => void;
   onOpenSettings: () => void;
+  onSettingsChange: (next: ApiSettings) => void;
   onAiGeneratePrompt: () => void;
   onCreatePrompt: () => void;
   onEditPrompt: (p: PromptTemplate) => void;
@@ -50,6 +52,7 @@ export function HomePage({
         onOpenBook={onOpenBook}
         onOpenBookFile={onOpenBookFile}
         onOpenSettings={onOpenSettings}
+        onSettingsChange={onSettingsChange}
         onOpenOverview={onOpenOverview}
         onOpenDistillation={onOpenDistillation}
       />

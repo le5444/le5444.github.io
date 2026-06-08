@@ -50,7 +50,7 @@ MEMORY_DIMENSION_LABELS = {
     "skill": "skill/prompt",
     "tool": "tool/observation",
 }
-MEMORY_MANAGEMENT_ACTIONS = {"memory_update", "memory_freeze", "memory_delete", "memory_merge"}
+MEMORY_MANAGEMENT_ACTIONS = {"memory_update", "memory_freeze", "memory_delete", "memory_merge", "memory_restore"}
 USER_MODEL_DIMENSIONS = {"identity", "preference", "boundary", "style", "project", "relationship"}
 SAFETY_LAYER_KEYS = ["intent", "scope", "source", "permission", "input", "dry_run", "writeback"]
 FILE_ACCESS_PROFILES = {"workspace", "full_access"}
@@ -207,6 +207,7 @@ PROVIDER_PRESETS = [
     {"id": "openrouter-auto", "label": "OpenRouter · Auto", "provider": "openai-compatible", "api_url": "https://openrouter.ai/api/v1", "model_id": "openrouter/auto", "model_name": "OpenRouter Auto", "group": "router", "notes": "聚合平台，可在模型 ID 中填写 openai/、anthropic/、google/ 等"},
     {"id": "openrouter-claude", "label": "OpenRouter · Claude", "provider": "openai-compatible", "api_url": "https://openrouter.ai/api/v1", "model_id": "anthropic/claude-3.5-sonnet", "model_name": "Claude via OpenRouter", "group": "router"},
     {"id": "openrouter-gpt", "label": "OpenRouter · GPT", "provider": "openai-compatible", "api_url": "https://openrouter.ai/api/v1", "model_id": "openai/gpt-4o-mini", "model_name": "GPT via OpenRouter", "group": "router"},
+    {"id": "codex2api-codex", "label": "Codex2API · gpt-5.3-codex", "provider": "openai-compatible", "api_url": "https://www.codex2api.com/v1", "model_id": "gpt-5.3-codex", "model_name": "GPT-5.3 Codex via Codex2API", "group": "router", "notes": "OpenAI-compatible 聚合端点；模型列表可通过 /models 探测，密钥只保存在本机设置或环境变量中。"},
     {"id": "oneapi-local", "label": "One API / New API", "provider": "openai-compatible", "api_url": "http://localhost:3000/v1", "model_id": "gpt-4o-mini", "model_name": "One API / New API Gateway", "group": "router", "notes": "适合自建聚合网关，模型 ID 按后台渠道映射填写"},
     {"id": "litellm-proxy", "label": "LiteLLM Proxy", "provider": "openai-compatible", "api_url": "http://localhost:4000/v1", "model_id": "gpt-4o-mini", "model_name": "LiteLLM Proxy", "group": "router", "notes": "适合把 OpenAI、Claude、Gemini、Bedrock 等统一转成 OpenAI-compatible"},
     {"id": "groq-llama", "label": "Groq · Llama", "provider": "openai-compatible", "api_url": "https://api.groq.com/openai/v1", "model_id": "llama-3.3-70b-versatile", "model_name": "Groq Llama 70B", "group": "global"},
@@ -429,9 +430,11 @@ def runtime_capabilities(
     execute_command: bool = False,
     execute_write: bool = False,
     full_access_files: bool = False,
+    execute_memory: bool = False,
     execute_scheduler: bool = False,
     execute_web: bool = False,
     execute_mcp: bool = False,
+    execute_provider: bool = False,
     execute_skill: bool = False,
 ) -> Dict[str, Any]:
     tool_matrix = [
@@ -558,10 +561,10 @@ def runtime_capabilities(
         {
             "action": "provider_probe",
             "label": "Provider Probe",
-            "enabled": True,
-            "mode": "explicit-model-list-probe",
-            "gateway_flag": "always-on",
-            "request_gate": "payload.execute=true; remote endpoints also require allow_remote_model=true",
+            "enabled": bool(execute_provider),
+            "mode": "live-model-list-probe" if execute_provider else "approval-required",
+            "gateway_flag": "--execute-provider",
+            "request_gate": "Gateway --execute-provider plus payload.execute=true; remote endpoints also require allow_remote_model=true",
             "scope": "model-list endpoints only",
             "default": "approval_required",
         },
@@ -585,14 +588,26 @@ def runtime_capabilities(
             "scope": "recorded worker job only",
             "default": "cancel_request",
         },
+        {
+            "action": "approval_decide:memory",
+            "label": "Memory Approval",
+            "enabled": bool(execute_memory),
+            "mode": "execute-memory" if execute_memory else "approval-required",
+            "gateway_flag": "--execute-memory",
+            "request_gate": "approval_decide decision=execute and payload.execute=true",
+            "scope": "AutoDream L1/L2 update/freeze/delete/merge only; soft delete with audit",
+            "default": "approval_required",
+        },
     ]
     return {
         "execute_read": bool(execute_read),
         "execute_command": bool(execute_command),
         "execute_write": bool(execute_write),
+        "execute_memory": bool(execute_memory),
         "execute_scheduler": bool(execute_scheduler),
         "execute_web": bool(execute_web),
         "execute_mcp": bool(execute_mcp),
+        "execute_provider": bool(execute_provider),
         "execute_skill": bool(execute_skill),
         "full_access_files": bool(full_access_files),
         "workspace_sandbox": True,
@@ -606,11 +621,13 @@ def runtime_capabilities(
         "capability_summary": {
             "workspace_read": "enabled" if execute_read else "requires --execute-read",
             "workspace_write": "enabled" if execute_write else "approval draft only",
+            "memory_write": "enabled" if execute_memory else "approval-only",
             "full_access_files": "enabled" if full_access_files else "requires --full-access-files",
             "verification_commands": "enabled" if execute_command else "validate only",
             "windows_scheduler": "enabled" if execute_scheduler else "draft only",
             "web_fetch": "enabled" if execute_web else "proposal only",
             "mcp_call": "enabled for HTTP + registered stdio" if execute_mcp else "proposal only",
+            "provider_probe": "enabled with approved provider probe" if execute_provider else "approval only",
             "mcp_stdio": f"{len(mcp_stdio_registry())} registered servers; no arbitrary command strings",
             "provider_hub": f"{len(PROVIDER_PRESETS)} presets; probe requires explicit request gate",
             "model_worker": "provider calls run in controlled child process; cancel terminates recorded child PID",
@@ -618,7 +635,7 @@ def runtime_capabilities(
             "external_connectors": "; ".join([
                 "web_fetch enabled" if execute_web else "web_fetch proposal only",
                 "mcp_call enabled" if execute_mcp else "mcp_call proposal only",
-                "provider_probe gated",
+                "provider_probe enabled" if execute_provider else "provider_probe approval only",
             ]),
         },
     }
@@ -1329,7 +1346,7 @@ def safety_review(action: str, purpose: str, payload: Dict[str, Any]) -> List[Di
         "Command validators blocked this request." if command_blocked else "Action requires approval or explicit execution flags." if action in approval_actions else "Action is read/stateful within Gateway policy.",
     ))
 
-    empty_payload_allowed = {"status", "approval_status", "memory_status", "memory_retrieve", "memory_bootstrap", "memory_consolidate", "context_pack", "source_audit", "source_digest", "provider_catalog", "provider_status", "provider_probe", "mcp_stdio_catalog", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_status", "skill_crystallize", "skill_review", "skill_activate", "kairos_tick", "scheduler_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "worker_status", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "user_model_status", "user_model_reflect", "swarm_bootstrap", "evolution_bootstrap"}
+    empty_payload_allowed = {"status", "approval_status", "memory_status", "memory_backup_status", "memory_retrieve", "memory_bootstrap", "memory_consolidate", "context_pack", "source_audit", "source_digest", "provider_catalog", "provider_status", "provider_probe", "mcp_stdio_catalog", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_status", "skill_crystallize", "skill_review", "skill_activate", "kairos_tick", "scheduler_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "worker_status", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "user_model_status", "user_model_reflect", "swarm_bootstrap", "evolution_bootstrap"}
     review.append(safety_item(
         "input",
         "pass" if payload or action in empty_payload_allowed else "warn",
@@ -1362,7 +1379,7 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             {"action": "search", "mode": "read", "description": "Search readable project text files."},
             {"action": "status", "mode": "read", "description": "Inspect bridge health, recent runs, and workflow state."},
             {"action": "approval_status", "mode": "read", "description": "Inspect recent approval queue records without executing them."},
-            {"action": "approval_decide", "mode": "approval-executor", "description": "Reject a queued approval or execute a queued write_file approval only when execute-write is enabled."},
+            {"action": "approval_decide", "mode": "approval-executor", "description": "Reject a queued approval, execute queued write_file with execute-write, queued memory management with execute-memory, or queued provider_probe with execute-provider."},
             {"action": "advance", "mode": "stateful", "description": "Advance a registered workflow DAG node."},
             {"action": "run", "mode": "stateful", "description": "Register or update a workflow DAG run."},
             {"action": "memory_event", "mode": "stateful", "description": "Append an AutoDream L1 memory event."},
@@ -1370,16 +1387,18 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             {"action": "memory_bootstrap", "mode": "stateful", "description": "Seed simulated long-context L1 events and consolidate them into L2 evidence."},
             {"action": "memory_status", "mode": "read", "description": "Inspect AutoDream L1/L2 memory state."},
             {"action": "memory_retrieve", "mode": "read", "description": "Retrieve a compact AutoDream L1/L2 context pack by query and dimension."},
-            {"action": "memory_update", "mode": "approval-only", "description": "Queue an approval draft to update an L1/L2 memory record; never mutates memory directly."},
-            {"action": "memory_freeze", "mode": "approval-only", "description": "Queue an approval draft to freeze an L1/L2 memory record; never mutates memory directly."},
-            {"action": "memory_delete", "mode": "approval-only", "description": "Queue an approval draft to delete an L1/L2 memory record; never mutates memory directly."},
-            {"action": "memory_merge", "mode": "approval-only", "description": "Queue an approval draft to manually merge memory records; never mutates memory directly."},
+            {"action": "memory_backup_status", "mode": "read", "description": "Inspect AutoDream backup history for restore review."},
+            {"action": "memory_update", "mode": "approval-or-execute-memory", "description": "Queue an approval draft to update an L1/L2 memory record; execution requires approval_decide plus execute-memory."},
+            {"action": "memory_freeze", "mode": "approval-or-execute-memory", "description": "Queue an approval draft to freeze an L1/L2 memory record; execution requires approval_decide plus execute-memory."},
+            {"action": "memory_delete", "mode": "approval-or-execute-memory", "description": "Queue an approval draft to soft-delete an L1/L2 memory record; execution requires approval_decide plus execute-memory."},
+            {"action": "memory_merge", "mode": "approval-or-execute-memory", "description": "Queue an approval draft to manually merge memory records; execution requires approval_decide plus execute-memory."},
+            {"action": "memory_restore", "mode": "approval-or-execute-memory", "description": "Queue an approval draft to restore AutoDream state from a backup; execution requires approval_decide plus execute-memory."},
             {"action": "context_pack", "mode": "read", "description": "Build a one-shot agent context pack from skill routing, memory retrieval, and tool policy."},
             {"action": "source_audit", "mode": "read", "description": "Classify research sources and return allowed reuse boundaries before learning from them."},
             {"action": "source_digest", "mode": "stateful", "description": "Turn audited safe sources into Personal OS architecture adoption notes."},
             {"action": "provider_catalog", "mode": "read", "description": "List model provider presets, wire formats, groups, and key requirements."},
             {"action": "provider_status", "mode": "read", "description": "Inspect one provider/model configuration and model-worker readiness without network calls."},
-            {"action": "provider_probe", "mode": "approval-or-explicit-probe", "description": "Probe a provider model-list endpoint only when payload execute=true and remote probes are explicitly allowed."},
+            {"action": "provider_probe", "mode": "approval-or-execute-provider", "description": "Queue a provider model-list probe by default; live probes require Gateway execute-provider, payload execute=true, and remote probes require allow_remote_model=true."},
             {"action": "goal_bootstrap", "mode": "stateful", "description": "Create a Goal Mode planner tree and optionally register workflow/subagents/KAIROS records."},
             {"action": "skill_bootstrap", "mode": "stateful", "description": "Verify domain skill mounting, tool exclusions, context pack, and workflow/subagent hooks."},
             {"action": "skill_route", "mode": "read", "description": "Route task text to core Personal OS and novel skills without executing scripts."},
@@ -1424,9 +1443,10 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             "command_validators": len(VALIDATORS),
             "file_access_profiles": sorted(FILE_ACCESS_PROFILES),
             "writes": "approval_queue_only_or_execute_write_with_backup",
+            "memory_management": "approval_queue_only_or_execute_memory_with_backup",
             "commands": "validate_only_or_opt_in_verification_allowlist",
             "scheduler": "draft_only_or_opt_in_execute_scheduler",
-            "provider_registry": "catalog_status_read_only; probe_requires_execute_and_remote_gate",
+            "provider_registry": "catalog_status_read_only; live_probe_requires_execute_provider_and_remote_gate",
             "skill_runtime": "proposal_only_or_opt_in_activated_skill_subprocess",
             "web_fetch": "proposal_only_or_opt_in_bounded_http_client",
             "mcp_call": "proposal_only_or_opt_in_http_or_registered_stdio_jsonrpc_client",
@@ -1458,7 +1478,7 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
         },
         {
             "name": "approval_decide",
-            "description": "Reject a queued approval or execute a queued write_file approval when Gateway execute-write is enabled.",
+            "description": "Reject a queued approval, execute a queued write_file approval with execute-write, queued memory management with execute-memory, or queued provider_probe with execute-provider.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1577,8 +1597,16 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
             },
         },
         {
+            "name": "memory_backup_status",
+            "description": "Inspect AutoDream backup history for restore review.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"limit": {"type": "number"}},
+            },
+        },
+        {
             "name": "memory_update",
-            "description": "Queue an approval draft to update an L1/L2 memory record; this tool does not mutate memory directly.",
+            "description": "Queue an approval draft to update an L1/L2 memory record; execution requires approval_decide and Gateway execute-memory.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1593,7 +1621,7 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
         },
         {
             "name": "memory_freeze",
-            "description": "Queue an approval draft to freeze an L1/L2 memory record; this tool does not mutate memory directly.",
+            "description": "Queue an approval draft to freeze an L1/L2 memory record; execution requires approval_decide and Gateway execute-memory.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1607,7 +1635,7 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
         },
         {
             "name": "memory_delete",
-            "description": "Queue an approval draft to delete an L1/L2 memory record; this tool does not mutate memory directly.",
+            "description": "Queue an approval draft to soft-delete an L1/L2 memory record; execution requires approval_decide and Gateway execute-memory.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1621,7 +1649,7 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
         },
         {
             "name": "memory_merge",
-            "description": "Queue an approval draft to manually merge L1/L2 memory records; this tool does not mutate memory directly.",
+            "description": "Queue an approval draft to manually merge L1/L2 memory records; execution requires approval_decide and Gateway execute-memory.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1632,6 +1660,19 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
                     "reason": {"type": "string"},
                 },
                 "required": ["record_ids"],
+            },
+        },
+        {
+            "name": "memory_restore",
+            "description": "Queue an approval draft to restore AutoDream state from a backup; execution requires approval_decide and Gateway execute-memory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "backup_name": {"type": "string"},
+                    "backup_path": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["backup_name"],
             },
         },
         {
@@ -1714,7 +1755,7 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
         },
         {
             "name": "provider_probe",
-            "description": "Probe a provider model-list endpoint only when payload execute=true and remote probes are explicitly allowed.",
+            "description": "Queue a provider model-list probe by default; live probes require Gateway execute-provider, payload execute=true, and remote probes require allow_remote_model=true.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -2271,6 +2312,8 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
 def approval_decide(
     payload: Dict[str, Any],
     execute_write: bool = False,
+    execute_memory: bool = False,
+    execute_provider: bool = False,
     full_access_files: bool = False,
 ) -> Dict[str, Any]:
     approval_id = str(payload.get("approval_id") or payload.get("id") or "").strip()
@@ -2306,14 +2349,14 @@ def approval_decide(
             "decision": decision_record,
             "message": "Approval rejected; no action executed.",
         }
-    if action != "write_file":
+    if action != "write_file" and action not in MEMORY_MANAGEMENT_ACTIONS and action != "provider_probe":
         decision_record = {
             "status": "blocked",
             "decision": "execute",
             "reason": reason,
             "decided_at": now_iso(),
             "action": action,
-            "message": "approval_decide currently only executes queued write_file approvals.",
+            "message": "approval_decide currently only executes queued write_file, memory management, and provider_probe approvals.",
         }
         record["decision"] = decision_record
         save_approval_record(approval_id, record)
@@ -2322,7 +2365,70 @@ def approval_decide(
             "approval_required": True,
             "approval_id": approval_id,
             "decision": decision_record,
-            "message": "Only write_file approvals can be executed by approval_decide v1.",
+            "message": "Only write_file, memory management, and provider_probe approvals can be executed by approval_decide.",
+        }
+    if action == "provider_probe":
+        if not execute_provider:
+            return {
+                "status": "approval_required",
+                "approval_required": True,
+                "approval_id": approval_id,
+                "message": "Executing a provider_probe approval requires Gateway --execute-provider.",
+            }
+        queued_payload = as_record(request.get("payload")).copy()
+        queued_payload["execute"] = True
+        probe_result = provider_probe(queued_payload, str(request.get("purpose") or reason or "approved provider probe"), execute_provider=True)
+        probe_status_value = str(probe_result.get("status") or "blocked")
+        decision_record = {
+            "status": "executed" if probe_status_value == "ok" else probe_status_value,
+            "decision": "execute",
+            "reason": reason,
+            "decided_at": now_iso(),
+            "action": action,
+            "target": str(probe_result.get("url") or as_record(probe_result.get("config")).get("api_url") or queued_payload.get("api_url") or queued_payload.get("preset_id") or ""),
+            "provider_probe": probe_result,
+        }
+        record["decision"] = decision_record
+        record["execution_result"] = probe_result
+        save_approval_record(approval_id, record)
+        return {
+            "status": "ok" if probe_status_value == "ok" else probe_status_value,
+            "approval_required": probe_status_value == "approval_required",
+            "approval_id": approval_id,
+            "decision": decision_record,
+            "provider_probe": probe_result,
+            "message": str(probe_result.get("reason") or "Provider probe approval decision recorded."),
+        }
+    if action in MEMORY_MANAGEMENT_ACTIONS:
+        if not execute_memory:
+            return {
+                "status": "approval_required",
+                "approval_required": True,
+                "approval_id": approval_id,
+                "message": "Executing a memory approval requires Gateway --execute-memory.",
+            }
+        queued_payload = as_record(request.get("payload")).copy()
+        memory_result = execute_memory_management(action, queued_payload, reason=reason)
+        memory_status_value = str(memory_result.get("status") or "blocked")
+        decision_record = {
+            "status": "executed" if memory_status_value == "ok" else memory_status_value,
+            "decision": "execute",
+            "reason": reason,
+            "decided_at": now_iso(),
+            "action": action,
+            "target": str(memory_result.get("target_id") or queued_payload.get("target_id") or ""),
+            "memory_management": memory_result,
+        }
+        record["decision"] = decision_record
+        record["execution_result"] = memory_result
+        save_approval_record(approval_id, record)
+        return {
+            "status": "ok" if memory_status_value == "ok" else memory_status_value,
+            "approval_required": memory_status_value != "ok",
+            "approval_id": approval_id,
+            "decision": decision_record,
+            "memory_management": memory_result,
+            "message": str(memory_result.get("message") or "Memory approval decision recorded."),
         }
     if not execute_write:
         return {
@@ -2903,7 +3009,7 @@ def memory_management_proposal(action: str, payload: Dict[str, Any], purpose: st
         "summary": str(payload.get("summary") or "").strip()[:1200],
         "target_snapshot": {},
         "review_gate": "This proposal is queued for human review; it does not mutate bridge/memory/autodream-state.json.",
-        "execute_policy": "No direct execute path is exposed for memory management actions yet.",
+        "execute_policy": "Execution requires approval_decide with Gateway --execute-memory and request execute=true.",
     }
     if target_id:
         proposal["target_snapshot"] = find_memory_record(state, target_id, target_kind)
@@ -2915,7 +3021,269 @@ def memory_management_proposal(action: str, payload: Dict[str, Any], purpose: st
                 snapshots.append(match)
         proposal["merge_snapshots"] = snapshots
         proposal["target_kind"] = target_kind or "L2"
+    if action == "memory_restore":
+        backup_name = Path(str(payload.get("backup_name") or payload.get("backup_path") or "")).name
+        proposal["backup_name"] = backup_name
+        proposal["backup_snapshot"] = memory_backup_record(backup_name)
+        proposal["target_kind"] = "state"
+        proposal["target_id"] = backup_name
     return proposal
+
+
+def memory_backup_record(name: str) -> Dict[str, Any]:
+    backup_name = Path(str(name or "")).name
+    if not backup_name:
+        return {}
+    backup_path = bridge_dir("memory") / "backups" / backup_name
+    if not backup_path.exists() or not backup_path.is_file():
+        return {}
+    backup_text = ""
+    try:
+        backup_text = backup_path.read_text(encoding="utf-8")
+        state = json.loads(backup_text)
+    except Exception:
+        state = {}
+    l1 = state.get("l1_events") if isinstance(state, dict) and isinstance(state.get("l1_events"), list) else []
+    l2 = state.get("l2_summaries") if isinstance(state, dict) and isinstance(state.get("l2_summaries"), list) else []
+    stat = backup_path.stat()
+    return {
+        "name": backup_name,
+        "path": str(backup_path.relative_to(bridge_root())),
+        "size": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        "l1_count": len(l1),
+        "l2_count": len(l2),
+        "sha256": short_sha256(backup_text) if backup_text and stat.st_size <= 2_000_000 else "",
+    }
+
+
+def memory_backup_status(payload: Dict[str, Any]) -> Dict[str, Any]:
+    limit = max(1, min(int(payload.get("limit") or 12), 50))
+    backup_dir = bridge_dir("memory") / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backups = [
+        memory_backup_record(path.name)
+        for path in sorted(backup_dir.glob("*.bak"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]
+    ]
+    current = load_memory_state()
+    l1 = current.get("l1_events") if isinstance(current.get("l1_events"), list) else []
+    l2 = current.get("l2_summaries") if isinstance(current.get("l2_summaries"), list) else []
+    return {
+        "count": len([item for item in backups if item]),
+        "backups": [item for item in backups if item],
+        "current": {
+            "path": str(memory_state_path().relative_to(bridge_root())),
+            "l1_count": len(l1),
+            "l2_count": len(l2),
+            "size": memory_state_path().stat().st_size if memory_state_path().exists() else 0,
+        },
+        "restore_gate": "memory_restore queues an approval; approval_decide with --execute-memory restores the backup.",
+    }
+
+
+def memory_collection_for_kind(state: Dict[str, Any], kind: str) -> List[Dict[str, Any]]:
+    normalized = normalize_memory_kind(kind)
+    key = "l2_summaries" if normalized == "L2" else "l1_events"
+    collection = state.setdefault(key, [])
+    if not isinstance(collection, list):
+        collection = []
+        state[key] = collection
+    return collection
+
+
+def find_memory_record_ref(state: Dict[str, Any], target_id: str, target_kind: str = "") -> Dict[str, Any]:
+    target = str(target_id or "").strip()
+    if not target:
+        return {}
+    collections = []
+    kind = normalize_memory_kind(target_kind)
+    if kind in {"", "L1"}:
+        collections.append(("L1", state.setdefault("l1_events", [])))
+    if kind in {"", "L2"}:
+        collections.append(("L2", state.setdefault("l2_summaries", [])))
+    for record_kind, records in collections:
+        if not isinstance(records, list):
+            continue
+        for index, record in enumerate(records):
+            if isinstance(record, dict) and str(record.get("id") or "") == target:
+                return {"kind": record_kind, "index": index, "record": record}
+    return {}
+
+
+def sanitize_memory_patch(patch: Dict[str, Any]) -> Dict[str, Any]:
+    allowed = {"summary", "tags", "importance", "confidence", "dimension", "source", "purpose", "evidence"}
+    clean: Dict[str, Any] = {}
+    for key, value in patch.items():
+        if key not in allowed:
+            continue
+        if key == "summary":
+            clean[key] = str(value or "").strip()[:1200]
+        elif key == "tags":
+            clean[key] = [str(item).strip() for item in value[:20] if str(item).strip()] if isinstance(value, list) else []
+        elif key == "importance":
+            try:
+                clean[key] = max(1, min(5, int(value)))
+            except Exception:
+                pass
+        elif key == "dimension":
+            clean[key] = normalize_memory_dimension(str(value or ""))
+        elif key == "evidence":
+            clean[key] = [str(item).strip()[:400] for item in value[:20] if str(item).strip()] if isinstance(value, list) else []
+        else:
+            clean[key] = str(value or "").strip()[:400]
+    return clean
+
+
+def backup_memory_state() -> str:
+    source = memory_state_path()
+    backup_dir = bridge_dir("memory") / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-autodream-state.json.bak"
+    if source.exists():
+        shutil.copy2(source, backup)
+    else:
+        backup.write_text(json.dumps({"l1_events": [], "l2_summaries": []}, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(backup.relative_to(bridge_root()))
+
+
+def execute_memory_management(action: str, payload: Dict[str, Any], reason: str = "") -> Dict[str, Any]:
+    state = load_memory_state()
+    backup_path = backup_memory_state()
+    executed_at = now_iso()
+    target_id = str(payload.get("target_id") or payload.get("id") or "").strip()
+    target_kind = normalize_memory_kind(str(payload.get("target_kind") or payload.get("kind") or ""))
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "action": action,
+        "executed_at": executed_at,
+        "backup_path": backup_path,
+        "target_id": target_id,
+        "target_kind": target_kind or "unknown",
+        "reason": reason or str(payload.get("reason") or payload.get("note") or ""),
+    }
+    if action == "memory_restore":
+        backup_name = Path(str(payload.get("backup_name") or payload.get("backup_path") or "")).name
+        backup_file = bridge_dir("memory") / "backups" / backup_name
+        if not backup_name or not backup_file.exists() or not backup_file.is_file():
+            return {**result, "status": "blocked", "message": f"memory backup not found: {backup_name}"}
+        try:
+            restored_state = json.loads(backup_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return {**result, "status": "blocked", "message": f"memory backup is unreadable: {exc}"}
+        if not isinstance(restored_state, dict) or not isinstance(restored_state.get("l1_events"), list):
+            return {**result, "status": "blocked", "message": "memory backup does not look like AutoDream state."}
+        restored_state.setdefault("l2_summaries", [])
+        save_memory_state(restored_state)
+        l1 = restored_state.get("l1_events") if isinstance(restored_state.get("l1_events"), list) else []
+        l2 = restored_state.get("l2_summaries") if isinstance(restored_state.get("l2_summaries"), list) else []
+        return {
+            **result,
+            "operation": "restored",
+            "target_id": backup_name,
+            "target_kind": "state",
+            "restored_backup": memory_backup_record(backup_name),
+            "restored_counts": {"l1": len(l1), "l2": len(l2)},
+            "message": "memory_restore executed with pre-restore AutoDream backup.",
+        }
+    if action in {"memory_update", "memory_freeze", "memory_delete"}:
+        found = find_memory_record_ref(state, target_id, target_kind)
+        if not found:
+            return {
+                **result,
+                "status": "blocked",
+                "message": f"memory target not found: {target_id}",
+            }
+        record = as_record(found.get("record"))
+        before = public_memory_record(record)
+        if action == "memory_update":
+            patch = sanitize_memory_patch(as_record(payload.get("patch")))
+            if not patch:
+                return {**result, "status": "blocked", "message": "memory_update requires a non-empty safe patch."}
+            record.update(patch)
+            record["updated_at"] = executed_at
+            record["updated_reason"] = result["reason"]
+            operation = "updated"
+        elif action == "memory_freeze":
+            record["frozen"] = True
+            record["frozen_at"] = executed_at
+            record["frozen_reason"] = result["reason"]
+            operation = "frozen"
+        else:
+            record["deleted"] = True
+            record["deleted_at"] = executed_at
+            record["deleted_reason"] = result["reason"]
+            operation = "soft_deleted"
+        after = public_memory_record(record) | {
+            "frozen": record.get("frozen"),
+            "deleted": record.get("deleted"),
+            "updated_at": record.get("updated_at"),
+            "frozen_at": record.get("frozen_at"),
+            "deleted_at": record.get("deleted_at"),
+        }
+        save_memory_state(state)
+        return {
+            **result,
+            "operation": operation,
+            "target_kind": str(found.get("kind") or target_kind or "unknown"),
+            "index": found.get("index"),
+            "before": before,
+            "after": after,
+            "message": f"{action} executed with AutoDream backup.",
+        }
+    if action == "memory_merge":
+        record_ids = [str(item).strip() for item in payload.get("record_ids", []) if str(item).strip()] if isinstance(payload.get("record_ids"), list) else []
+        if len(record_ids) < 2:
+            return {**result, "status": "blocked", "message": "memory_merge requires at least two record_ids."}
+        snapshots = []
+        source_records = []
+        for record_id in record_ids[:20]:
+            found = find_memory_record_ref(state, record_id, target_kind)
+            if found:
+                snapshots.append(found)
+                source_records.append(as_record(found.get("record")))
+        if len(source_records) < 2:
+            return {**result, "status": "blocked", "message": "memory_merge could not resolve at least two records."}
+        dimension = normalize_memory_dimension(str(payload.get("dimension") or source_records[0].get("dimension") or "episode"))
+        tags = sorted({
+            str(tag).strip()
+            for record in source_records
+            for tag in (record.get("tags") if isinstance(record.get("tags"), list) else [])
+            if str(tag).strip()
+        })[:20]
+        summary_text = str(payload.get("summary") or "").strip()
+        if not summary_text:
+            summary_text = " / ".join(str(record.get("summary") or "")[:180] for record in source_records[:5])
+        merged = {
+            "id": f"l2-manual-{uuid.uuid4()}",
+            "at": executed_at,
+            "dimension": dimension,
+            "event_ids": record_ids,
+            "summary": summary_text[:1600],
+            "purpose": "manual memory_merge approval",
+            "tags": tags,
+            "evidence": [
+                f"{record.get('id')}: {str(record.get('summary') or '')[:240]}"
+                for record in source_records[:8]
+            ],
+            "confidence": "manual",
+            "merged_by": "approval_decide",
+            "merge_reason": result["reason"],
+        }
+        memory_collection_for_kind(state, "L2").append(merged)
+        for item in snapshots:
+            record = as_record(item.get("record"))
+            record["merged_into"] = merged["id"]
+            record["merged_at"] = executed_at
+        save_memory_state(state)
+        return {
+            **result,
+            "operation": "merged",
+            "target_kind": "L2",
+            "merged_record": public_memory_record(merged),
+            "source_count": len(source_records),
+            "message": "memory_merge executed with AutoDream backup.",
+        }
+    return {**result, "status": "blocked", "message": f"unsupported memory action: {action}"}
 
 
 def memory_status(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -6559,12 +6927,19 @@ def provider_status(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def provider_probe(payload: Dict[str, Any], purpose: str) -> Dict[str, Any]:
+def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool = False) -> Dict[str, Any]:
     config = resolve_provider_config(payload)
     api_url = str(config.get("api_url") or "").strip()
     provider = str(config.get("provider") or "openai-compatible")
     if not api_url:
         raise ValueError("provider_probe api_url or preset_id is required")
+    if not bool(execute_provider):
+        return {
+            "status": "approval_required",
+            "reason": "provider_probe requires Gateway --execute-provider before any network probe",
+            "config": config,
+            "policy": provider_registry_policy(),
+        }
     if not bool(payload.get("execute")):
         return {
             "status": "approval_required",
@@ -7643,39 +8018,47 @@ def handle_request(
     record: bool = False,
     execute_command: bool = False,
     execute_write: bool = False,
+    execute_memory: bool = False,
     execute_scheduler: bool = False,
     execute_web: bool = False,
     execute_mcp: bool = False,
+    execute_provider: bool = False,
     execute_skill: bool = False,
     full_access_files: bool = False,
     gateway_execute_read: bool | None = None,
     gateway_execute_command: bool | None = None,
     gateway_execute_write: bool | None = None,
+    gateway_execute_memory: bool | None = None,
     gateway_execute_scheduler: bool | None = None,
     gateway_execute_web: bool | None = None,
     gateway_execute_mcp: bool | None = None,
+    gateway_execute_provider: bool | None = None,
     gateway_execute_skill: bool | None = None,
 ) -> Dict[str, Any]:
     action = str(req.get("action") or "").strip()
     purpose = str(req.get("purpose") or "").strip()
     payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
     access_profile = normalize_file_access_profile(payload)
-    result = base_result(action, purpose, execute or execute_write or execute_command or execute_scheduler or execute_web or execute_mcp or execute_skill)
+    result = base_result(action, purpose, execute or execute_write or execute_memory or execute_command or execute_scheduler or execute_web or execute_mcp or execute_provider or execute_skill)
     result["tool_access"] = {
         "file_access_profile": access_profile,
         "request_execute_read_enabled": execute,
         "request_execute_command_enabled": execute_command,
         "request_execute_write_enabled": execute_write,
+        "request_execute_memory_enabled": execute_memory,
         "request_execute_scheduler_enabled": execute_scheduler,
         "request_execute_web_enabled": execute_web,
         "request_execute_mcp_enabled": execute_mcp,
+        "request_execute_provider_enabled": execute_provider,
         "request_execute_skill_enabled": execute_skill,
         "gateway_execute_read_enabled": execute if gateway_execute_read is None else bool(gateway_execute_read),
         "gateway_execute_command_enabled": execute_command if gateway_execute_command is None else bool(gateway_execute_command),
         "gateway_execute_write_enabled": execute_write if gateway_execute_write is None else bool(gateway_execute_write),
+        "gateway_execute_memory_enabled": execute_memory if gateway_execute_memory is None else bool(gateway_execute_memory),
         "gateway_execute_scheduler_enabled": execute_scheduler if gateway_execute_scheduler is None else bool(gateway_execute_scheduler),
         "gateway_execute_web_enabled": execute_web if gateway_execute_web is None else bool(gateway_execute_web),
         "gateway_execute_mcp_enabled": execute_mcp if gateway_execute_mcp is None else bool(gateway_execute_mcp),
+        "gateway_execute_provider_enabled": execute_provider if gateway_execute_provider is None else bool(gateway_execute_provider),
         "gateway_execute_skill_enabled": execute_skill if gateway_execute_skill is None else bool(gateway_execute_skill),
         "full_access_files_enabled": full_access_files,
         "workspace_sandbox_enabled": True,
@@ -7686,9 +8069,11 @@ def handle_request(
         execute_read=result["tool_access"]["gateway_execute_read_enabled"],
         execute_command=result["tool_access"]["gateway_execute_command_enabled"],
         execute_write=result["tool_access"]["gateway_execute_write_enabled"],
+        execute_memory=result["tool_access"]["gateway_execute_memory_enabled"],
         execute_scheduler=result["tool_access"]["gateway_execute_scheduler_enabled"],
         execute_web=result["tool_access"]["gateway_execute_web_enabled"],
         execute_mcp=result["tool_access"]["gateway_execute_mcp_enabled"],
+        execute_provider=result["tool_access"]["gateway_execute_provider_enabled"],
         execute_skill=result["tool_access"]["gateway_execute_skill_enabled"],
         full_access_files=full_access_files,
     )
@@ -7837,6 +8222,13 @@ def handle_request(
             "memory_retrieve": retrieve_memory(payload),
             "message": "AutoDream memory context pack retrieved.",
         })
+    elif action == "memory_backup_status":
+        result.update({
+            "approval_required": False,
+            "status": "ok",
+            "memory_backup_status": memory_backup_status(payload),
+            "message": "AutoDream memory backup history inspected without restoring state.",
+        })
     elif action == "approval_status":
         result.update({
             "approval_required": False,
@@ -7845,7 +8237,7 @@ def handle_request(
             "message": "Approval queue inspected without approving or executing records.",
         })
     elif action == "approval_decide":
-        decision_result = approval_decide(payload, execute_write=execute_write, full_access_files=full_access_files)
+        decision_result = approval_decide(payload, execute_write=execute_write, execute_memory=execute_memory, execute_provider=execute_provider, full_access_files=full_access_files)
         result.update({
             "approval_required": bool(decision_result.get("approval_required", False)),
             "status": str(decision_result.get("status") or "ok"),
@@ -7906,13 +8298,15 @@ def handle_request(
             "message": "Registered stdio MCP servers returned without spawning processes.",
         })
     elif action == "provider_probe":
-        probe = provider_probe(payload, purpose)
+        probe = provider_probe(payload, purpose, execute_provider=execute_provider)
         result.update({
             "approval_required": probe.get("status") == "approval_required",
             "status": "ok" if probe.get("status") == "ok" else probe.get("status", "approval_required"),
             "provider_probe": probe,
             "message": "Provider probe processed with explicit network gate.",
         })
+        if result.get("approval_required") and record:
+            result["approval_id"] = save_record("approvals", req, result)
     elif action == "goal_bootstrap":
         bootstrap = bootstrap_goal(payload, purpose)
         result.update({
@@ -8301,17 +8695,21 @@ def handle_mcp_rpc(
     execute: bool = False,
     execute_command: bool = False,
     execute_write: bool = False,
+    execute_memory: bool = False,
     execute_scheduler: bool = False,
     execute_web: bool = False,
     execute_mcp: bool = False,
+    execute_provider: bool = False,
     execute_skill: bool = False,
     full_access_files: bool = False,
     gateway_execute_read: bool | None = None,
     gateway_execute_command: bool | None = None,
     gateway_execute_write: bool | None = None,
+    gateway_execute_memory: bool | None = None,
     gateway_execute_scheduler: bool | None = None,
     gateway_execute_web: bool | None = None,
     gateway_execute_mcp: bool | None = None,
+    gateway_execute_provider: bool | None = None,
     gateway_execute_skill: bool | None = None,
 ) -> Dict[str, Any]:
     request_id = body.get("id")
@@ -8386,17 +8784,21 @@ def handle_mcp_rpc(
             record=True,
             execute_command=execute_command,
             execute_write=execute_write,
+            execute_memory=execute_memory,
             execute_scheduler=execute_scheduler,
             execute_web=execute_web,
             execute_mcp=execute_mcp,
+            execute_provider=execute_provider,
             execute_skill=execute_skill,
             full_access_files=full_access_files,
             gateway_execute_read=gateway_execute_read,
             gateway_execute_command=gateway_execute_command,
             gateway_execute_write=gateway_execute_write,
+            gateway_execute_memory=gateway_execute_memory,
             gateway_execute_scheduler=gateway_execute_scheduler,
             gateway_execute_web=gateway_execute_web,
             gateway_execute_mcp=gateway_execute_mcp,
+            gateway_execute_provider=gateway_execute_provider,
             gateway_execute_skill=gateway_execute_skill,
         )
         return jsonrpc_success(request_id, {
@@ -8441,9 +8843,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     execute_read=bool(getattr(self.server, "execute_read", False)),
                     execute_command=bool(getattr(self.server, "execute_command", False)),
                     execute_write=bool(getattr(self.server, "execute_write", False)),
+                    execute_memory=bool(getattr(self.server, "execute_memory", False)),
                     execute_scheduler=bool(getattr(self.server, "execute_scheduler", False)),
                     execute_web=bool(getattr(self.server, "execute_web", False)),
                     execute_mcp=bool(getattr(self.server, "execute_mcp", False)),
+                    execute_provider=bool(getattr(self.server, "execute_provider", False)),
                     execute_skill=bool(getattr(self.server, "execute_skill", False)),
                     full_access_files=bool(getattr(self.server, "full_access_files", False)),
                 ),
@@ -8455,9 +8859,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 execute_read=bool(getattr(self.server, "execute_read", False)),
                 execute_command=bool(getattr(self.server, "execute_command", False)),
                 execute_write=bool(getattr(self.server, "execute_write", False)),
+                execute_memory=bool(getattr(self.server, "execute_memory", False)),
                 execute_scheduler=bool(getattr(self.server, "execute_scheduler", False)),
                 execute_web=bool(getattr(self.server, "execute_web", False)),
                 execute_mcp=bool(getattr(self.server, "execute_mcp", False)),
+                execute_provider=bool(getattr(self.server, "execute_provider", False)),
                 execute_skill=bool(getattr(self.server, "execute_skill", False)),
                 full_access_files=bool(getattr(self.server, "full_access_files", False)),
             )
@@ -8479,16 +8885,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 gateway_execute_read = bool(getattr(self.server, "execute_read", False))
                 gateway_execute_command = bool(getattr(self.server, "execute_command", False))
                 gateway_execute_write = bool(getattr(self.server, "execute_write", False))
+                gateway_execute_memory = bool(getattr(self.server, "execute_memory", False))
                 gateway_execute_scheduler = bool(getattr(self.server, "execute_scheduler", False))
                 gateway_execute_web = bool(getattr(self.server, "execute_web", False))
                 gateway_execute_mcp = bool(getattr(self.server, "execute_mcp", False))
+                gateway_execute_provider = bool(getattr(self.server, "execute_provider", False))
                 gateway_execute_skill = bool(getattr(self.server, "execute_skill", False))
                 execute_read = bool(gateway_execute_read and request_execute)
                 execute_command = bool(gateway_execute_command and request_execute)
                 execute_write = bool(gateway_execute_write and request_execute)
+                execute_memory = bool(gateway_execute_memory and request_execute)
                 execute_scheduler = bool(gateway_execute_scheduler and request_execute)
                 execute_web = bool(gateway_execute_web and request_execute)
                 execute_mcp = bool(gateway_execute_mcp and request_execute)
+                execute_provider = bool(gateway_execute_provider and request_execute)
                 execute_skill = bool(gateway_execute_skill and request_execute)
                 full_access_files = bool(getattr(self.server, "full_access_files", False))
                 self._send_json(200, handle_request(
@@ -8497,17 +8907,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     record=True,
                     execute_command=execute_command,
                     execute_write=execute_write,
+                    execute_memory=execute_memory,
                     execute_scheduler=execute_scheduler,
                     execute_web=execute_web,
                     execute_mcp=execute_mcp,
+                    execute_provider=execute_provider,
                     execute_skill=execute_skill,
                     full_access_files=full_access_files,
                     gateway_execute_read=gateway_execute_read,
                     gateway_execute_command=gateway_execute_command,
                     gateway_execute_write=gateway_execute_write,
+                    gateway_execute_memory=gateway_execute_memory,
                     gateway_execute_scheduler=gateway_execute_scheduler,
                     gateway_execute_web=gateway_execute_web,
                     gateway_execute_mcp=gateway_execute_mcp,
+                    gateway_execute_provider=gateway_execute_provider,
                     gateway_execute_skill=gateway_execute_skill,
                 ))
             elif path == "/mcp":
@@ -8517,16 +8931,20 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 gateway_execute_read = bool(getattr(self.server, "execute_read", False))
                 gateway_execute_command = bool(getattr(self.server, "execute_command", False))
                 gateway_execute_write = bool(getattr(self.server, "execute_write", False))
+                gateway_execute_memory = bool(getattr(self.server, "execute_memory", False))
                 gateway_execute_scheduler = bool(getattr(self.server, "execute_scheduler", False))
                 gateway_execute_web = bool(getattr(self.server, "execute_web", False))
                 gateway_execute_mcp = bool(getattr(self.server, "execute_mcp", False))
+                gateway_execute_provider = bool(getattr(self.server, "execute_provider", False))
                 gateway_execute_skill = bool(getattr(self.server, "execute_skill", False))
                 execute_read = bool(gateway_execute_read and request_execute)
                 execute_command = bool(gateway_execute_command and request_execute)
                 execute_write = bool(gateway_execute_write and request_execute)
+                execute_memory = bool(gateway_execute_memory and request_execute)
                 execute_scheduler = bool(gateway_execute_scheduler and request_execute)
                 execute_web = bool(gateway_execute_web and request_execute)
                 execute_mcp = bool(gateway_execute_mcp and request_execute)
+                execute_provider = bool(gateway_execute_provider and request_execute)
                 execute_skill = bool(gateway_execute_skill and request_execute)
                 full_access_files = bool(getattr(self.server, "full_access_files", False))
                 self._send_json(200, handle_mcp_rpc(
@@ -8534,17 +8952,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     execute=execute_read,
                     execute_command=execute_command,
                     execute_write=execute_write,
+                    execute_memory=execute_memory,
                     execute_scheduler=execute_scheduler,
                     execute_web=execute_web,
                     execute_mcp=execute_mcp,
+                    execute_provider=execute_provider,
                     execute_skill=execute_skill,
                     full_access_files=full_access_files,
                     gateway_execute_read=gateway_execute_read,
                     gateway_execute_command=gateway_execute_command,
                     gateway_execute_write=gateway_execute_write,
+                    gateway_execute_memory=gateway_execute_memory,
                     gateway_execute_scheduler=gateway_execute_scheduler,
                     gateway_execute_web=gateway_execute_web,
                     gateway_execute_mcp=gateway_execute_mcp,
+                    gateway_execute_provider=gateway_execute_provider,
                     gateway_execute_skill=gateway_execute_skill,
                 ))
             elif path == "/approval":
@@ -8565,9 +8987,11 @@ def serve(
     autodream_interval: int,
     autodream_threshold: int,
     execute_write: bool = False,
+    execute_memory: bool = False,
     execute_scheduler: bool = False,
     execute_web: bool = False,
     execute_mcp: bool = False,
+    execute_provider: bool = False,
     execute_skill: bool = False,
     full_access_files: bool = False,
 ) -> int:
@@ -8575,9 +8999,11 @@ def serve(
     httpd.execute_read = execute_read  # type: ignore[attr-defined]
     httpd.execute_command = execute_command  # type: ignore[attr-defined]
     httpd.execute_write = execute_write  # type: ignore[attr-defined]
+    httpd.execute_memory = execute_memory  # type: ignore[attr-defined]
     httpd.execute_scheduler = execute_scheduler  # type: ignore[attr-defined]
     httpd.execute_web = execute_web  # type: ignore[attr-defined]
     httpd.execute_mcp = execute_mcp  # type: ignore[attr-defined]
+    httpd.execute_provider = execute_provider  # type: ignore[attr-defined]
     httpd.execute_skill = execute_skill  # type: ignore[attr-defined]
     httpd.full_access_files = full_access_files  # type: ignore[attr-defined]
     if kairos_interval > 0:
@@ -8593,9 +9019,11 @@ def serve(
         "execute_read": execute_read,
         "execute_command": execute_command,
         "execute_write": execute_write,
+        "execute_memory": execute_memory,
         "execute_scheduler": execute_scheduler,
         "execute_web": execute_web,
         "execute_mcp": execute_mcp,
+        "execute_provider": execute_provider,
         "execute_skill": execute_skill,
         "full_access_files": full_access_files,
         "kairos_interval": kairos_interval,
@@ -8614,9 +9042,11 @@ def main() -> int:
     parser.add_argument("--execute", action="store_true", help="Allow safe read_file execution in CLI mode")
     parser.add_argument("--execute-command", action="store_true", help="Allow opt-in execution of allowlisted verification commands")
     parser.add_argument("--execute-write", action="store_true", help="Allow write_file execution when each request also sets execute=true")
+    parser.add_argument("--execute-memory", action="store_true", help="Allow approval_decide to execute queued memory management approvals when each request also sets execute=true")
     parser.add_argument("--execute-scheduler", action="store_true", help="Allow scheduler_install/scheduler_uninstall when each request also sets execute=true")
     parser.add_argument("--execute-web", action="store_true", help="Allow bounded web_fetch when each request also sets execute=true")
     parser.add_argument("--execute-mcp", action="store_true", help="Allow bounded mcp_call HTTP JSON-RPC calls when each request also sets execute=true")
+    parser.add_argument("--execute-provider", action="store_true", help="Allow provider_probe model-list probes, including approval_decide execution of queued probes, when each request also sets execute=true")
     parser.add_argument("--execute-skill", action="store_true", help="Allow reviewed activated skill_run execution when each request also sets execute=true")
     parser.add_argument("--full-access-files", action="store_true", help="Allow read_file/write_file paths outside the workspace when access_profile=full_access")
     parser.add_argument("--serve", action="store_true", help="Start the local HTTP Gateway")
@@ -8641,9 +9071,11 @@ def main() -> int:
             autodream_interval=args.autodream_interval,
             autodream_threshold=args.autodream_threshold,
             execute_write=args.execute_write,
+            execute_memory=args.execute_memory,
             execute_scheduler=args.execute_scheduler,
             execute_web=args.execute_web,
             execute_mcp=args.execute_mcp,
+            execute_provider=args.execute_provider,
             execute_skill=args.execute_skill,
             full_access_files=args.full_access_files,
         )
@@ -8656,9 +9088,11 @@ def main() -> int:
             record=False,
             execute_command=args.execute_command,
             execute_write=args.execute_write,
+            execute_memory=args.execute_memory,
             execute_scheduler=args.execute_scheduler,
             execute_web=args.execute_web,
             execute_mcp=args.execute_mcp,
+            execute_provider=args.execute_provider,
             execute_skill=args.execute_skill,
             full_access_files=args.full_access_files,
         )

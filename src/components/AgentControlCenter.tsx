@@ -6,6 +6,7 @@ import {
   Brain,
   CheckCircle2,
   Clock,
+  CopyPlus,
   Cpu,
   Database,
   Download,
@@ -28,6 +29,7 @@ import {
   PanelsTopLeft,
   Plus,
   RefreshCw,
+  Save,
   Server,
   Settings,
   ShieldCheck,
@@ -45,11 +47,13 @@ import {
   PROVIDER_PRESETS,
   allowsEmptyApiKey,
   inferProvider,
+  type ApiProfile,
   type ApiSettings,
   isConfigured,
 } from "../store/settings";
 import { type BookProject, type LibraryState } from "../store/library";
 import { type PromptTemplate } from "../store/workspace";
+import { buildLineDiff, type ApprovalDiffLine } from "../utils/approval-diff";
 import { htmlToPlainText, loadJSON, saveJSON, uid, wordCount } from "../utils/helpers";
 
 type JsonRecord = Record<string, unknown>;
@@ -62,6 +66,7 @@ interface ControlCenterState {
   health: JsonRecord | null;
   provider: JsonRecord | null;
   memory: JsonRecord | null;
+  memoryBackups: JsonRecord | null;
   skill: JsonRecord | null;
   worker: JsonRecord | null;
   approval: JsonRecord | null;
@@ -88,6 +93,22 @@ interface ProviderActionSnapshot {
   at: number;
 }
 
+interface ProviderConfigDraftSnapshot {
+  profileId: string;
+  presetId: string;
+  provider: ApiSettings["provider"] | "";
+  apiUrl: string;
+  modelId: string;
+  modelName: string;
+  temperature: string;
+  maxTokens: string;
+  timeoutSeconds: string;
+  allowRemoteModel: boolean;
+  status: string;
+  detail: string;
+  at: number;
+}
+
 interface ApprovalDecisionSnapshot {
   approvalId: string;
   decision: "reject" | "execute" | "";
@@ -107,6 +128,33 @@ interface TerminalCommandSnapshot {
   result: JsonRecord | null;
 }
 
+type SkillScopeFilter = "all" | "coding" | "writing" | "research" | "automation" | "general";
+
+interface SkillRoutePreviewSnapshot {
+  task: string;
+  domain: SkillScopeFilter;
+  status: string;
+  detail: string;
+  at: number;
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+}
+
+interface SkillLibraryRow {
+  id: string;
+  key: string;
+  label: string;
+  scope: string;
+  source: string;
+  rootLabel: string;
+  status: string;
+  path: string;
+  description: string;
+  tags: string[];
+  record: JsonRecord;
+  searchable: string;
+}
+
 interface CommandDraftSnapshot {
   task: string;
   status: string;
@@ -118,6 +166,22 @@ interface CommandDraftSnapshot {
   excludedToolScopes: string[];
   toolPlan: Array<{ label: string; status: string; detail: string }>;
   data: JsonRecord | null;
+}
+
+interface WorkspaceContextPackSnapshot {
+  id: string;
+  workspaceId: string;
+  workspaceTitle: string;
+  task: string;
+  status: string;
+  detail: string;
+  at: number;
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+  contextItems: JsonRecord[];
+  threadContextItems: JsonRecord[];
+  activeSkillKeys: string[];
+  excludedToolScopes: string[];
 }
 
 interface CommandWorkerSnapshot {
@@ -167,7 +231,7 @@ interface ChangeFileRow {
 
 type MemoryKind = "L1" | "L2";
 type MemoryKindFilter = "all" | MemoryKind;
-type MemoryDraftKind = "update" | "freeze" | "delete";
+type MemoryDraftKind = "update" | "freeze" | "delete" | "restore";
 
 interface MemoryManagerRow {
   id: string;
@@ -188,7 +252,7 @@ interface MemoryDraftActionSnapshot {
   detail: string;
   at: number;
   memoryId: string;
-  memoryKind: MemoryKind;
+  memoryKind: MemoryKind | "state";
   request: JsonRecord | null;
   result: JsonRecord | null;
 }
@@ -209,6 +273,113 @@ interface SpecProtocolDraftSnapshot {
   result: JsonRecord | null;
 }
 
+interface SpecProtocolExistingFile extends SpecProtocolDraftFile {
+  status: string;
+  detail: string;
+  target: string;
+  result: JsonRecord | null;
+}
+
+interface SpecProtocolSyncSnapshot {
+  status: string;
+  detail: string;
+  at: number;
+  files: SpecProtocolExistingFile[];
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+}
+
+interface SpecProtocolDiffRow {
+  path: string;
+  title: string;
+  kind: SpecProtocolDraftFile["kind"];
+  status: string;
+  detail: string;
+  beforeLength: number;
+  afterLength: number;
+  added: number;
+  removed: number;
+  diff: ApprovalDiffLine[];
+}
+
+type WorkspaceFileDraftKind = "create" | "clone" | "archive" | "category_archive" | "path_index";
+
+interface WorkspaceFileDraftSnapshot {
+  kind: WorkspaceFileDraftKind;
+  status: string;
+  detail: string;
+  at: number;
+  path: string;
+  title: string;
+  content: string;
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+}
+
+interface CrossWorkspaceFileRow {
+  book: BookProject;
+  workspaceTitle: string;
+  workspaceDomain: string;
+  workspaceIcon: string;
+  file: BookProject["workspace"]["files"][number];
+  path: string;
+  words: number;
+  selected: boolean;
+}
+
+interface CrossWorkspaceRecentEntry {
+  id: string;
+  bookId: string;
+  fileId: string;
+  openedAt: number;
+}
+
+interface WorkspaceSummary {
+  book: BookProject;
+  title: string;
+  domain: string;
+  icon: string;
+  description: string;
+  files: number;
+  words: number;
+  categoryCount: number;
+}
+
+interface WorkspaceManagerRow extends WorkspaceSummary {
+  activeThreadCount: number;
+  archivedThreadCount: number;
+  contextAttachmentCount: number;
+  approvalCount: number;
+  recentCount: number;
+  latestFile: BookProject["workspace"]["files"][number] | null;
+  latestFilePath: string;
+  updatedAt: number;
+  searchable: string;
+}
+
+type WorkspacePermissionLevel = "inherit" | "allow" | "approval" | "deny";
+
+interface WorkspacePermissionProfile {
+  workspaceId: string;
+  updatedAt: number;
+  readFiles: WorkspacePermissionLevel;
+  writeFiles: WorkspacePermissionLevel;
+  runCommands: WorkspacePermissionLevel;
+  remoteModels: WorkspacePermissionLevel;
+  mcpCalls: WorkspacePermissionLevel;
+  skillRuntime: WorkspacePermissionLevel;
+  scheduler: WorkspacePermissionLevel;
+  notes: string;
+}
+
+interface WorkspaceSkillSet {
+  workspaceId: string;
+  updatedAt: number;
+  enabledSkillKeys: string[];
+  disabledSkillKeys: string[];
+  notes: string;
+}
+
 type DetailTab = "overview" | "memory" | "skills" | "providers" | "workers";
 type WorkbenchView = "agent" | "workspaces" | "memory" | "skills" | "tools" | "providers" | "workers" | "automation" | "writing";
 type BottomPanelTab = "terminal" | "output" | "problems" | "workers" | "gateway" | "approvals";
@@ -217,7 +388,7 @@ type RuntimeLogStatusFilter = "all" | "issues" | "active";
 type RuntimeLogExportFormat = "jsonl" | "markdown";
 type ApprovalDetailTab = "proposal" | "request" | "result" | "decision";
 type AgentThreadScope = "current_workspace" | "all_workspaces" | "unbound";
-type AgentThreadContextKind = "workspace" | "file" | "memory" | "skill" | "context_pack" | "approval" | "worker";
+type AgentThreadContextKind = "workspace" | "file" | "memory" | "skill" | "context_pack" | "approval" | "worker" | "provider";
 type AgentThreadEventKind = "system" | "draft" | "worker" | "approval" | "diff" | "write" | "note";
 type AgentThreadMessageRole = "user" | "assistant" | "system" | "tool";
 type WorkbenchPartKey = "activityBarVisible" | "primarySidebarVisible" | "secondarySidebarVisible" | "bottomPanelVisible" | "statusbarVisible";
@@ -323,6 +494,10 @@ const AGENT_THREADS_KEY = "lumenos-agent-threads";
 const AGENT_THREAD_SPACES_KEY = "lumenos-agent-thread-spaces";
 const RUNTIME_LOGS_KEY = "lumenos-runtime-logs";
 const WORKBENCH_LAYOUT_KEY = "lumenos-workbench-layout";
+const CROSS_WORKSPACE_RECENTS_KEY = "lumenos-cross-workspace-recents";
+const WORKSPACE_CONTEXT_PACK_HISTORY_KEY = "lumenos-workspace-context-pack-history";
+const WORKSPACE_PERMISSION_PROFILES_KEY = "lumenos-workspace-permission-profiles";
+const WORKSPACE_SKILL_SETS_KEY = "lumenos-workspace-skill-sets";
 const INITIAL_STATE: ControlCenterState = {
   loading: false,
   online: false,
@@ -331,6 +506,7 @@ const INITIAL_STATE: ControlCenterState = {
   health: null,
   provider: null,
   memory: null,
+  memoryBackups: null,
   skill: null,
   worker: null,
   approval: null,
@@ -343,6 +519,13 @@ const BOTTOM_PANEL_TABS: BottomPanelTab[] = ["terminal", "output", "problems", "
 const RUNTIME_LOG_STATUS_FILTERS: RuntimeLogStatusFilter[] = ["all", "issues", "active"];
 const RUNTIME_LOG_EXPORT_FORMATS: RuntimeLogExportFormat[] = ["jsonl", "markdown"];
 const AGENT_THREAD_SCOPES: AgentThreadScope[] = ["current_workspace", "all_workspaces", "unbound"];
+const WORKSPACE_PERMISSION_LEVELS: WorkspacePermissionLevel[] = ["inherit", "allow", "approval", "deny"];
+const WORKSPACE_PERMISSION_LEVEL_LABELS: Record<WorkspacePermissionLevel, string> = {
+  inherit: "继承",
+  allow: "允许",
+  approval: "审批",
+  deny: "禁用",
+};
 const DEFAULT_WORKBENCH_LAYOUT_STATE: WorkbenchLayoutState = {
   version: 1,
   activeView: "agent",
@@ -395,6 +578,72 @@ function displayValue(value: unknown, fallback = "n/a") {
   } catch {
     return String(value);
   }
+}
+
+function memoryRecordStatuses(record: JsonRecord) {
+  const rows: Array<{ label: string; status: string; detail: string }> = [];
+  if (asBoolean(record.deleted)) {
+    rows.push({
+      label: "软删除",
+      status: "deleted",
+      detail: asString(record.deleted_reason, asString(record.delete_reason, "该记录已标记为软删除。")),
+    });
+  }
+  if (asBoolean(record.frozen)) {
+    rows.push({
+      label: "冻结",
+      status: "frozen",
+      detail: asString(record.frozen_reason, "该记录已冻结，避免自动合并污染上下文。"),
+    });
+  }
+  if (asString(record.merged_into)) {
+    rows.push({
+      label: "已合并",
+      status: "merged",
+      detail: `合并到 ${asString(record.merged_into)}`,
+    });
+  }
+  if (!rows.length) {
+    rows.push({ label: "活跃", status: "active", detail: "可被检索、召回和进入 context_pack。" });
+  }
+  return rows;
+}
+
+function memoryStatusTone(status: string) {
+  if (["active"].includes(status)) return "bg-emerald-500/10 text-emerald-300";
+  if (["frozen", "merged"].includes(status)) return "bg-amber-500/10 text-amber-300";
+  if (["deleted"].includes(status)) return "bg-red-500/10 text-red-300";
+  return "bg-slate-800 text-slate-400";
+}
+
+function memoryDraftDiffRows(draft: MemoryDraftActionSnapshot | null, row: MemoryManagerRow | null) {
+  if (!draft?.request) return [];
+  const payload = asRecord(draft.request.payload);
+  const patch = asRecord(payload.patch);
+  if (draft.kind === "restore") {
+    return [
+      { field: "操作", before: "当前 AutoDream 状态", after: asString(payload.backup_name, "未选择备份") },
+      { field: "闸门", before: "只生成审批", after: "approval_decide + --execute-memory 才能恢复" },
+    ];
+  }
+  const record = row?.record || {};
+  if (draft.kind === "freeze") {
+    return [
+      { field: "frozen", before: displayValue(record.frozen, "false"), after: "true" },
+      { field: "reason", before: asString(record.frozen_reason, "无"), after: asString(payload.reason, "等待审批") },
+    ];
+  }
+  if (draft.kind === "delete") {
+    return [
+      { field: "deleted", before: displayValue(record.deleted, "false"), after: "true" },
+      { field: "reason", before: asString(record.deleted_reason, "无"), after: asString(payload.reason, "等待审批") },
+    ];
+  }
+  return Object.entries(patch).map(([field, after]) => ({
+    field,
+    before: displayValue(record[field]),
+    after: displayValue(after),
+  }));
 }
 
 function formatNumber(value: number) {
@@ -504,7 +753,7 @@ function normalizeAgentThreadContextAttachment(value: unknown): AgentThreadConte
   if (!id) return null;
   return {
     id,
-    kind: ["workspace", "file", "memory", "skill", "context_pack", "approval", "worker"].includes(kind) ? kind : "context_pack",
+    kind: ["workspace", "file", "memory", "skill", "context_pack", "approval", "worker", "provider"].includes(kind) ? kind : "context_pack",
     title: asString(record.title, "上下文附件"),
     detail: asString(record.detail),
     ref: asString(record.ref, id),
@@ -825,6 +1074,169 @@ function loadRuntimeLogs() {
     .slice(0, 120);
 }
 
+function normalizeCrossWorkspaceRecentEntry(value: unknown): CrossWorkspaceRecentEntry | null {
+  const record = asRecord(value);
+  const bookId = asString(record.bookId);
+  const fileId = asString(record.fileId);
+  if (!bookId || !fileId) return null;
+  return {
+    id: asString(record.id, `${bookId}:${fileId}`),
+    bookId,
+    fileId,
+    openedAt: asNumber(record.openedAt, Date.now()),
+  };
+}
+
+function loadCrossWorkspaceRecents() {
+  const deduped = new Map<string, CrossWorkspaceRecentEntry>();
+  loadJSON<unknown[]>(CROSS_WORKSPACE_RECENTS_KEY, [])
+    .map(normalizeCrossWorkspaceRecentEntry)
+    .filter((entry): entry is CrossWorkspaceRecentEntry => Boolean(entry))
+    .sort((a, b) => b.openedAt - a.openedAt)
+    .forEach((entry) => {
+      const key = `${entry.bookId}:${entry.fileId}`;
+      if (!deduped.has(key)) deduped.set(key, entry);
+    });
+  return Array.from(deduped.values()).slice(0, 24);
+}
+
+function createEmptyWorkspaceContextPackSnapshot(): WorkspaceContextPackSnapshot {
+  return {
+    id: "",
+    workspaceId: "",
+    workspaceTitle: "",
+    task: "",
+    status: "",
+    detail: "",
+    at: 0,
+    request: null,
+    result: null,
+    contextItems: [],
+    threadContextItems: [],
+    activeSkillKeys: [],
+    excludedToolScopes: [],
+  };
+}
+
+function normalizeWorkspaceContextPackSnapshot(value: unknown): WorkspaceContextPackSnapshot | null {
+  const record = asRecord(value);
+  const workspaceId = asString(record.workspaceId);
+  if (!workspaceId) return null;
+  const at = asNumber(record.at, Date.now());
+  return {
+    id: asString(record.id, `workspace-context-pack-${workspaceId}-${at}`),
+    workspaceId,
+    workspaceTitle: asString(record.workspaceTitle, "未命名工作区"),
+    task: asString(record.task),
+    status: asString(record.status, "draft"),
+    detail: asString(record.detail),
+    at,
+    request: Object.keys(asRecord(record.request)).length ? asRecord(record.request) : null,
+    result: Object.keys(asRecord(record.result)).length ? asRecord(record.result) : null,
+    contextItems: asRecordList(record.contextItems).slice(0, 18),
+    threadContextItems: asRecordList(record.threadContextItems).slice(0, 12),
+    activeSkillKeys: asArray(record.activeSkillKeys).map((item) => String(item)).filter(Boolean).slice(0, 16),
+    excludedToolScopes: asArray(record.excludedToolScopes).map((item) => String(item)).filter(Boolean).slice(0, 16),
+  };
+}
+
+function loadWorkspaceContextPackHistory() {
+  return loadJSON<unknown[]>(WORKSPACE_CONTEXT_PACK_HISTORY_KEY, [])
+    .map(normalizeWorkspaceContextPackSnapshot)
+    .filter((item): item is WorkspaceContextPackSnapshot => Boolean(item))
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 40);
+}
+
+function defaultWorkspacePermissionProfile(workspaceId: string): WorkspacePermissionProfile {
+  return {
+    workspaceId,
+    updatedAt: 0,
+    readFiles: "inherit",
+    writeFiles: "approval",
+    runCommands: "approval",
+    remoteModels: "approval",
+    mcpCalls: "approval",
+    skillRuntime: "approval",
+    scheduler: "approval",
+    notes: "工作区权限 profile 只声明策略；真实执行仍需要 Gateway 对应 execute flag 和请求级 gate。",
+  };
+}
+
+function normalizePermissionLevel(value: unknown, fallback: WorkspacePermissionLevel): WorkspacePermissionLevel {
+  const level = String(value || "");
+  return WORKSPACE_PERMISSION_LEVELS.includes(level as WorkspacePermissionLevel) ? level as WorkspacePermissionLevel : fallback;
+}
+
+function normalizeWorkspacePermissionProfile(value: unknown): WorkspacePermissionProfile | null {
+  const record = asRecord(value);
+  const workspaceId = asString(record.workspaceId);
+  if (!workspaceId) return null;
+  const fallback = defaultWorkspacePermissionProfile(workspaceId);
+  return {
+    workspaceId,
+    updatedAt: asNumber(record.updatedAt, 0),
+    readFiles: normalizePermissionLevel(record.readFiles, fallback.readFiles),
+    writeFiles: normalizePermissionLevel(record.writeFiles, fallback.writeFiles),
+    runCommands: normalizePermissionLevel(record.runCommands, fallback.runCommands),
+    remoteModels: normalizePermissionLevel(record.remoteModels, fallback.remoteModels),
+    mcpCalls: normalizePermissionLevel(record.mcpCalls, fallback.mcpCalls),
+    skillRuntime: normalizePermissionLevel(record.skillRuntime, fallback.skillRuntime),
+    scheduler: normalizePermissionLevel(record.scheduler, fallback.scheduler),
+    notes: asString(record.notes, fallback.notes),
+  };
+}
+
+function loadWorkspacePermissionProfiles() {
+  const profiles: Record<string, WorkspacePermissionProfile> = {};
+  loadJSON<unknown[]>(WORKSPACE_PERMISSION_PROFILES_KEY, [])
+    .map(normalizeWorkspacePermissionProfile)
+    .filter((item): item is WorkspacePermissionProfile => Boolean(item))
+    .forEach((profile) => {
+      profiles[profile.workspaceId] = profile;
+    });
+  return profiles;
+}
+
+function defaultWorkspaceSkillSet(workspaceId: string): WorkspaceSkillSet {
+  return {
+    workspaceId,
+    updatedAt: 0,
+    enabledSkillKeys: [],
+    disabledSkillKeys: [],
+    notes: "工作区 Skills 集只声明默认上下文能力；Skill runtime 仍需单独审批和 execute-skill gate。",
+  };
+}
+
+function normalizeSkillKeyList(value: unknown) {
+  return Array.from(new Set(asArray(value).map((item) => String(item).trim()).filter(Boolean))).slice(0, 48);
+}
+
+function normalizeWorkspaceSkillSet(value: unknown): WorkspaceSkillSet | null {
+  const record = asRecord(value);
+  const workspaceId = asString(record.workspaceId);
+  if (!workspaceId) return null;
+  const fallback = defaultWorkspaceSkillSet(workspaceId);
+  return {
+    workspaceId,
+    updatedAt: asNumber(record.updatedAt, 0),
+    enabledSkillKeys: normalizeSkillKeyList(record.enabledSkillKeys),
+    disabledSkillKeys: normalizeSkillKeyList(record.disabledSkillKeys),
+    notes: asString(record.notes, fallback.notes),
+  };
+}
+
+function loadWorkspaceSkillSets() {
+  const sets: Record<string, WorkspaceSkillSet> = {};
+  loadJSON<unknown[]>(WORKSPACE_SKILL_SETS_KEY, [])
+    .map(normalizeWorkspaceSkillSet)
+    .filter((item): item is WorkspaceSkillSet => Boolean(item))
+    .forEach((set) => {
+      sets[set.workspaceId] = set;
+    });
+  return sets;
+}
+
 function normalizeWorkbenchLayoutState(value: unknown): WorkbenchLayoutState {
   const record = asRecord(value);
   const activeView = asString(record.activeView, DEFAULT_WORKBENCH_LAYOUT_STATE.activeView) as WorkbenchView;
@@ -1023,6 +1435,39 @@ function comparableFileName(value: string) {
   return pathBaseName(value).replace(/\.(md|txt|json|html|tsx?|jsx?)$/i, "").trim().toLowerCase();
 }
 
+function workspaceDraftSafeSegment(value: string, fallback = "workspace") {
+  const normalized = value
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return (normalized || fallback).slice(0, 80);
+}
+
+function workspacePathSegment(value: string, fallback = "untitled") {
+  const normalized = value
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return (normalized || fallback).slice(0, 96);
+}
+
+function workspaceFileVirtualPath(book: BookProject, file: BookProject["workspace"]["files"][number]) {
+  const workspace = workspacePathSegment(workspaceDisplayTitle(book), book.id);
+  const category = workspacePathSegment(file.category || "未分组", "uncategorized");
+  const title = workspacePathSegment(file.title || "未命名文件", file.id);
+  const hasExtension = /\.[a-z0-9]{1,8}$/i.test(title);
+  const extension = file.kind === "image"
+    ? file.mimeType?.includes("png")
+      ? ".png"
+      : file.mimeType?.includes("webp")
+        ? ".webp"
+        : ".jpg"
+    : ".md";
+  return `${workspace}/${category}/${hasExtension ? title : `${title}${extension}`}`;
+}
+
 function displayEndpoint(apiUrl: string) {
   if (!apiUrl.trim()) return "尚未配置端点";
   try {
@@ -1057,6 +1502,42 @@ function modelKeyEnv(provider: string) {
   return "ZHIMENG_MODEL_API_KEY";
 }
 
+function numericDraftValue(value: string, fallback?: number) {
+  const normalized = value.trim();
+  if (!normalized) return fallback;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function providerDisplayLabel(provider: string) {
+  return PROVIDER_LABELS[provider as keyof typeof PROVIDER_LABELS] || provider || "未选择 Provider";
+}
+
+function redactedProviderPayload(payload: JsonRecord): JsonRecord {
+  const provider = asString(payload.provider);
+  const apiUrl = asString(payload.api_url);
+  const keyRequired = !allowsEmptyApiKey(apiUrl, provider as ApiSettings["provider"]);
+  return {
+    provider,
+    provider_label: providerDisplayLabel(provider),
+    api_url: displayEndpoint(apiUrl),
+    endpoint_scope: isLocalEndpoint(apiUrl) ? "local" : apiUrl ? "remote" : "unconfigured",
+    model_id: asString(payload.model_id) || "未设置",
+    model_name: asString(payload.model_name) || "未设置",
+    api_key: asString(payload.api_key) ? "[present:redacted]" : "[empty]",
+    api_key_required: keyRequired,
+    api_key_env: asString(payload.api_key_env) || "无",
+    temperature: payload.temperature ?? "Provider 默认",
+    max_tokens: payload.max_tokens ?? "Provider 默认",
+    execute: Boolean(payload.execute),
+    allow_remote_model: Boolean(payload.allow_remote_model),
+    execute_model: Boolean(payload.execute_model),
+    request_gate: isLocalEndpoint(apiUrl)
+      ? "local endpoint; execute gate still required for model Worker"
+      : "remote endpoint requires explicit allow_remote_model=true",
+  };
+}
+
 function providerGroupName(group: string) {
   const labels: Record<string, string> = {
     official: "官方 API",
@@ -1066,6 +1547,29 @@ function providerGroupName(group: string) {
     local: "本地运行时",
   };
   return labels[group] || group || "其他";
+}
+
+function providerProfileHost(apiUrl: string) {
+  try {
+    return new URL(apiUrl).host;
+  } catch {
+    return apiUrl.replace(/^https?:\/\//, "").replace(/\/.*$/, "") || "Provider";
+  }
+}
+
+function providerProfileName(draft: ProviderConfigDraftSnapshot, provider: ApiSettings["provider"] | "") {
+  const modelName = draft.modelName.trim();
+  if (modelName) return modelName;
+  const modelId = draft.modelId.trim();
+  const host = providerProfileHost(draft.apiUrl.trim());
+  return modelId ? `${modelId} · ${host}` : `${providerDisplayLabel(provider || "openai-compatible")} · ${host}`;
+}
+
+function numericProviderDraftSetting(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const num = Number(trimmed);
+  return Number.isFinite(num) ? num : undefined;
 }
 
 function providerPresetRecord(preset: (typeof PROVIDER_PRESETS)[number]): JsonRecord {
@@ -1219,6 +1723,7 @@ function buildMemoryManagerRow(record: JsonRecord, kind: MemoryKind, index: numb
 function memoryDraftActionTitle(kind: MemoryDraftKind) {
   if (kind === "update") return "编辑草案";
   if (kind === "freeze") return "冻结草案";
+  if (kind === "restore") return "恢复草案";
   return "删除草案";
 }
 
@@ -1258,6 +1763,58 @@ function terminalCommandResultText(result: JsonRecord | null) {
     asString(execution.stderr) ? `stderr:\n${asString(execution.stderr).trimEnd()}` : "",
   ].filter(Boolean);
   return lines.join("\n");
+}
+
+function skillRowFromRecord(item: JsonRecord, fallbackStatus = "local"): SkillLibraryRow {
+  const key = asString(item.key, asString(item.id, asString(item.title, asString(item.label, "skill"))));
+  const label = asString(item.label, asString(item.title, key || "Skill"));
+  const tags = asArray(item.tags).map((tag) => String(tag)).filter(Boolean);
+  const path = asString(item.path, asString(item.activated_path, asString(item.draft_path)));
+  const scope = asString(item.scope, asString(item.dimension, "general"));
+  const source = asString(item.source, asString(item.root_key, "runtime"));
+  const rootLabel = asString(item.root_label, asString(item.reviewed_by, source));
+  const description = asString(item.description, asString(item.purpose, asString(item.safety_note)));
+  const status = asString(item.status, fallbackStatus);
+  const id = key || `${label}-${stableJobSuffix(`${scope}-${source}-${path}`)}`;
+  return {
+    id,
+    key: key || id,
+    label,
+    scope,
+    source,
+    rootLabel,
+    status,
+    path,
+    description,
+    tags,
+    record: item,
+    searchable: [
+      key,
+      label,
+      scope,
+      source,
+      rootLabel,
+      path,
+      description,
+      tags.join(" "),
+      status,
+    ].join("\n").toLowerCase(),
+  };
+}
+
+function dedupeSkillRows(rows: SkillLibraryRow[]) {
+  const map = new Map<string, SkillLibraryRow>();
+  rows.forEach((row) => {
+    const existing = map.get(row.key);
+    if (!existing) {
+      map.set(row.key, row);
+      return;
+    }
+    const existingRank = existing.status === "activated" ? 2 : existing.status === "candidate" ? 1 : 0;
+    const nextRank = row.status === "activated" ? 2 : row.status === "candidate" ? 1 : 0;
+    if (nextRank >= existingRank) map.set(row.key, { ...existing, ...row, record: { ...existing.record, ...row.record } });
+  });
+  return Array.from(map.values());
 }
 
 function deepNumber(value: unknown, keys: string[], depth = 0): number | null {
@@ -1524,6 +2081,7 @@ function MemoryListRow({
 }) {
   const importance = asNumber(row.record.importance);
   const confidence = asNumber(row.record.confidence);
+  const statuses = memoryRecordStatuses(row.record);
   return (
     <button
       type="button"
@@ -1544,6 +2102,9 @@ function MemoryListRow({
       </div>
       <p className="line-clamp-2 text-xs leading-relaxed text-slate-300">{row.summary}</p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {statuses.map((item) => (
+          <span key={item.label} className={`rounded px-1.5 py-0.5 text-[10px] ${memoryStatusTone(item.status)}`}>{item.label}</span>
+        ))}
         {importance > 0 && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-amber-300">重要 {importance}</span>}
         {confidence > 0 && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-emerald-300">置信 {confidence}</span>}
         {row.tags.slice(0, 4).map((tag) => <span key={tag} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-500">{tag}</span>)}
@@ -1572,7 +2133,7 @@ function SkillRow({ item }: { item: JsonRecord }) {
   );
 }
 
-function ProviderRow({ item }: { item: JsonRecord }) {
+function ProviderRow({ item, onApply }: { item: JsonRecord; onApply?: (item: JsonRecord) => void }) {
   const local = asBoolean(item.local);
   const keyOptional = asBoolean(item.key_optional);
   return (
@@ -1588,6 +2149,15 @@ function ProviderRow({ item }: { item: JsonRecord }) {
             {local ? "本地" : "远程"}
           </span>
           <span className={keyOptional ? "text-[10px] text-slate-500" : "text-[10px] text-amber-300"}>{keyOptional ? "密钥可选" : "密钥必填"}</span>
+          {onApply && (
+            <button
+              type="button"
+              onClick={() => onApply(item)}
+              className="rounded border border-slate-700 px-2 py-1 text-[10px] text-cyan-200 transition-colors hover:border-cyan-500/40 hover:bg-cyan-500/10"
+            >
+              载入草案
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1631,6 +2201,7 @@ export function AgentControlCenter({
   onOpenBook,
   onOpenBookFile,
   onOpenSettings,
+  onSettingsChange,
   onOpenOverview,
   onOpenDistillation,
 }: {
@@ -1641,12 +2212,31 @@ export function AgentControlCenter({
   onOpenBook: (id: string) => void;
   onOpenBookFile?: (bookId: string, fileId: string) => void;
   onOpenSettings: () => void;
+  onSettingsChange: (next: ApiSettings) => void;
   onOpenOverview?: () => void;
   onOpenDistillation: () => void;
 }) {
   const [state, setState] = useState<ControlCenterState>(INITIAL_STATE);
   const [quickAction, setQuickAction] = useState<{ label: string; status: string; detail: string }>({ label: "", status: "", detail: "" });
   const [providerAction, setProviderAction] = useState<ProviderActionSnapshot>({ label: "", action: "", status: "", detail: "", data: null, at: 0 });
+  const [providerConfigDraft, setProviderConfigDraft] = useState<ProviderConfigDraftSnapshot>(() => {
+    const provider = settings.provider || inferProvider(settings.apiUrl);
+    return {
+      profileId: settings.activeProfileId || "",
+      presetId: "",
+      provider,
+      apiUrl: settings.apiUrl,
+      modelId: settings.modelId,
+      modelName: settings.modelName,
+      temperature: settings.temperature !== undefined ? String(settings.temperature) : "",
+      maxTokens: settings.maxTokens !== undefined ? String(settings.maxTokens) : "",
+      timeoutSeconds: "5",
+      allowRemoteModel: false,
+      status: "draft",
+      detail: "基于当前 API 设置生成；可切换预设后再做状态检查或探针草案。",
+      at: Date.now(),
+    };
+  });
   const [terminalCommand, setTerminalCommand] = useState<TerminalCommandSnapshot>({
     command: "python --version",
     status: "",
@@ -1722,16 +2312,45 @@ export function AgentControlCenter({
   const [showArchivedThreads, setShowArchivedThreads] = useState(false);
   const [threadComposer, setThreadComposer] = useState("");
   const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLogEntry[]>(loadRuntimeLogs);
+  const [crossWorkspaceRecents, setCrossWorkspaceRecents] = useState<CrossWorkspaceRecentEntry[]>(loadCrossWorkspaceRecents);
   const [selectedExplorerFileId, setSelectedExplorerFileId] = useState<string | null>(null);
   const [selectedChangeFileId, setSelectedChangeFileId] = useState<string | null>(null);
+  const [workspaceManagerSearch, setWorkspaceManagerSearch] = useState("");
+  const [workspaceDomainFilter, setWorkspaceDomainFilter] = useState("all");
+  const [workspaceContextPack, setWorkspaceContextPack] = useState<WorkspaceContextPackSnapshot>(createEmptyWorkspaceContextPackSnapshot);
+  const [workspaceContextPackHistory, setWorkspaceContextPackHistory] = useState<WorkspaceContextPackSnapshot[]>(loadWorkspaceContextPackHistory);
+  const [workspacePermissionProfiles, setWorkspacePermissionProfiles] = useState<Record<string, WorkspacePermissionProfile>>(loadWorkspacePermissionProfiles);
+  const [workspaceSkillSets, setWorkspaceSkillSets] = useState<Record<string, WorkspaceSkillSet>>(loadWorkspaceSkillSets);
   const [workspaceExplorerSearch, setWorkspaceExplorerSearch] = useState("");
   const [collapsedExplorerCategories, setCollapsedExplorerCategories] = useState<Set<string>>(new Set());
+  const [workspaceFileDraft, setWorkspaceFileDraft] = useState<WorkspaceFileDraftSnapshot | null>(null);
   const [memorySearch, setMemorySearch] = useState("");
   const [memoryKindFilter, setMemoryKindFilter] = useState<MemoryKindFilter>("all");
   const [memoryDimensionFilter, setMemoryDimensionFilter] = useState("all");
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [memoryDraftAction, setMemoryDraftAction] = useState<MemoryDraftActionSnapshot | null>(null);
+  const [skillSearch, setSkillSearch] = useState("");
+  const [skillScopeFilter, setSkillScopeFilter] = useState<SkillScopeFilter>("all");
+  const [selectedSkillKey, setSelectedSkillKey] = useState<string | null>(null);
+  const [skillRouteTask, setSkillRouteTask] = useState("继续把灵枢 LumenOS 开发成 Codex / Claude Code 风格 Personal Agent OS");
+  const [skillRoutePreview, setSkillRoutePreview] = useState<SkillRoutePreviewSnapshot>({
+    task: "",
+    domain: "general",
+    status: "",
+    detail: "",
+    at: 0,
+    request: null,
+    result: null,
+  });
   const [specProtocolDraft, setSpecProtocolDraft] = useState<SpecProtocolDraftSnapshot>({
+    status: "",
+    detail: "",
+    at: 0,
+    files: [],
+    request: null,
+    result: null,
+  });
+  const [specProtocolSync, setSpecProtocolSync] = useState<SpecProtocolSyncSnapshot>({
     status: "",
     detail: "",
     at: 0,
@@ -1762,7 +2381,7 @@ export function AgentControlCenter({
   const lastBook = useMemo<BookProject | null>(() => {
     return library.books.find((book) => book.id === library.lastOpenedBookId) || library.books[0] || null;
   }, [library.books, library.lastOpenedBookId]);
-  const allWorkspaceSummaries = useMemo(() => [...library.books]
+  const allWorkspaceSummaries = useMemo<WorkspaceSummary[]>(() => [...library.books]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .map((book) => {
       const files = book.workspace.files;
@@ -1780,6 +2399,7 @@ export function AgentControlCenter({
       };
     }), [library.books]);
   const workspaceSummaries = useMemo(() => allWorkspaceSummaries.slice(0, 5), [allWorkspaceSummaries]);
+  const workspaceSummaryById = useMemo(() => new Map(allWorkspaceSummaries.map((item) => [item.book.id, item])), [allWorkspaceSummaries]);
   const activeWorkspace = useMemo(() => {
     return allWorkspaceSummaries.find((item) => item.book.id === lastBook?.id) || allWorkspaceSummaries[0] || null;
   }, [allWorkspaceSummaries, lastBook?.id]);
@@ -1857,8 +2477,48 @@ export function AgentControlCenter({
   }, [runtimeLogs]);
 
   useEffect(() => {
+    saveJSON(CROSS_WORKSPACE_RECENTS_KEY, crossWorkspaceRecents);
+  }, [crossWorkspaceRecents]);
+
+  useEffect(() => {
+    saveJSON(WORKSPACE_CONTEXT_PACK_HISTORY_KEY, workspaceContextPackHistory);
+  }, [workspaceContextPackHistory]);
+
+  useEffect(() => {
+    saveJSON(WORKSPACE_PERMISSION_PROFILES_KEY, Object.values(workspacePermissionProfiles));
+  }, [workspacePermissionProfiles]);
+
+  useEffect(() => {
+    saveJSON(WORKSPACE_SKILL_SETS_KEY, Object.values(workspaceSkillSets));
+  }, [workspaceSkillSets]);
+
+  useEffect(() => {
     saveJSON(WORKBENCH_LAYOUT_KEY, workbenchLayout);
   }, [workbenchLayout]);
+
+  useEffect(() => {
+    const provider = settings.provider || inferProvider(settings.apiUrl);
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      profileId: settings.activeProfileId || "",
+      presetId: "",
+      provider,
+      apiUrl: settings.apiUrl,
+      modelId: settings.modelId,
+      modelName: settings.modelName,
+      temperature: settings.temperature !== undefined ? String(settings.temperature) : "",
+      maxTokens: settings.maxTokens !== undefined ? String(settings.maxTokens) : "",
+      detail: prev.status === "draft" && (
+        prev.apiUrl !== settings.apiUrl
+        || prev.modelId !== settings.modelId
+        || prev.modelName !== settings.modelName
+        || prev.provider !== provider
+      )
+        ? "已同步当前 API 设置；可切换预设后再做状态检查或探针草案。"
+        : prev.detail,
+      at: Date.now(),
+    }));
+  }, [settings.activeProfileId, settings.apiUrl, settings.maxTokens, settings.modelId, settings.modelName, settings.provider, settings.temperature]);
 
   useEffect(() => {
     const existing = agentThreads.find((thread) => thread.id === activeThreadId);
@@ -2338,6 +2998,7 @@ export function AgentControlCenter({
       captureJson("health", fetchJson(`${GATEWAY_ORIGIN}/health`)),
       captureJson("provider", bridgeAction("provider_catalog", { limit: 12 })),
       captureJson("memory", bridgeAction("memory_status", {})),
+      captureJson("memoryBackups", bridgeAction("memory_backup_status", { limit: 8 })),
       captureJson("skill", bridgeAction("skill_status", {})),
       captureJson("worker", bridgeAction("worker_status", {})),
       captureJson("approval", bridgeAction("approval_status", { limit: 20 })),
@@ -2361,6 +3022,7 @@ export function AgentControlCenter({
       health: byLabel.get("health")?.data ?? null,
       provider: byLabel.get("provider")?.data ?? null,
       memory: byLabel.get("memory")?.data ?? null,
+      memoryBackups: byLabel.get("memoryBackups")?.data ?? null,
       skill: byLabel.get("skill")?.data ?? null,
       worker: byLabel.get("worker")?.data ?? null,
       approval: byLabel.get("approval")?.data ?? null,
@@ -2421,6 +3083,14 @@ export function AgentControlCenter({
       const status = nestedStatus || asString(result.status, "ok");
       const detail = asString(nested.reason, asString(result.message, status));
       setProviderAction({ label, action, status, detail, data: result, at: Date.now() });
+      if (label.includes("草案") || label.includes("Provider 配置")) {
+        setProviderConfigDraft((prev) => ({
+          ...prev,
+          status,
+          detail,
+          at: Date.now(),
+        }));
+      }
       setQuickAction({ label, status, detail });
       appendRuntimeLog({
         channel: "output",
@@ -2457,6 +3127,14 @@ export function AgentControlCenter({
     } catch (error) {
       const detail = error instanceof Error ? error.message : "执行失败";
       setProviderAction({ label, action, status: "error", detail, data: null, at: Date.now() });
+      if (label.includes("草案") || label.includes("Provider 配置")) {
+        setProviderConfigDraft((prev) => ({
+          ...prev,
+          status: "error",
+          detail,
+          at: Date.now(),
+        }));
+      }
       setQuickAction({ label, status: "error", detail });
       appendRuntimeLog({
         channel: "output",
@@ -2467,11 +3145,207 @@ export function AgentControlCenter({
     }
   }, [refresh]);
 
+  const applyProviderPresetToDraft = (preset: JsonRecord) => {
+    const provider = asString(preset.provider, inferProvider(asString(preset.api_url))) as ApiSettings["provider"];
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      profileId: "",
+      presetId: asString(preset.id),
+      provider,
+      apiUrl: asString(preset.api_url),
+      modelId: asString(preset.model_id),
+      modelName: asString(preset.model_name, asString(preset.label)),
+      allowRemoteModel: false,
+      status: "draft",
+      detail: `已载入预设：${asString(preset.label, asString(preset.id, "Provider"))}；仍未保存设置、未发起网络请求。`,
+      at: Date.now(),
+    }));
+  };
+
+  const applyProviderProfileToDraft = (profile: NonNullable<ApiSettings["profiles"]>[number]) => {
+    const provider = profile.provider || inferProvider(profile.apiUrl);
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      profileId: profile.id,
+      presetId: "",
+      provider,
+      apiUrl: profile.apiUrl,
+      modelId: profile.modelId,
+      modelName: profile.modelName,
+      temperature: profile.temperature !== undefined ? String(profile.temperature) : prev.temperature,
+      maxTokens: profile.maxTokens !== undefined ? String(profile.maxTokens) : prev.maxTokens,
+      allowRemoteModel: false,
+      status: "draft",
+      detail: `已载入配置档案：${profile.name}；仍未保存设置、未发起网络请求。`,
+      at: Date.now(),
+    }));
+  };
+
+  const resetProviderDraftFromSettings = () => {
+    const provider = settings.provider || inferProvider(settings.apiUrl);
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      profileId: settings.activeProfileId || "",
+      presetId: "",
+      provider,
+      apiUrl: settings.apiUrl,
+      modelId: settings.modelId,
+      modelName: settings.modelName,
+      temperature: settings.temperature !== undefined ? String(settings.temperature) : "",
+      maxTokens: settings.maxTokens !== undefined ? String(settings.maxTokens) : "",
+      allowRemoteModel: false,
+      status: "draft",
+      detail: "已恢复为当前 API 设置；没有写入配置文件。",
+      at: Date.now(),
+    }));
+  };
+
+  const markProviderDraftReviewed = (detail: string, status = "draft") => {
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      status,
+      detail,
+      at: Date.now(),
+    }));
+  };
+
+  const providerDraftProfileSnapshot = (): ApiProfile | null => {
+    if (!providerConfigDraft.apiUrl.trim() || !providerConfigDraft.modelId.trim()) return null;
+    const provider = providerConfigDraft.provider || inferProvider(providerConfigDraft.apiUrl);
+    const activeMatchingProfile = providerConfigDraft.profileId
+      ? settingsProfiles.find((profile) => profile.id === providerConfigDraft.profileId)
+      : null;
+    const name = providerProfileName(providerConfigDraft, provider);
+    return {
+      id: activeMatchingProfile?.id || `api-profile-${Date.now()}`,
+      name,
+      apiUrl: providerConfigDraft.apiUrl.trim(),
+      apiKey: activeMatchingProfile?.apiKey || settings.apiKey,
+      modelId: providerConfigDraft.modelId.trim(),
+      modelName: providerConfigDraft.modelName.trim() || name,
+      provider,
+      temperature: numericProviderDraftSetting(providerConfigDraft.temperature),
+      maxTokens: numericProviderDraftSetting(providerConfigDraft.maxTokens),
+    };
+  };
+
+  const saveProviderDraftProfile = (activate = false) => {
+    const snapshot = providerDraftProfileSnapshot();
+    if (!snapshot) {
+      markProviderDraftReviewed("保存失败：请先填写 endpoint 和模型 ID。", "error");
+      appendRuntimeLog({
+        channel: "problems",
+        title: "Provider 配置档案未保存",
+        detail: "缺少 endpoint 或模型 ID。",
+        status: "error",
+      });
+      return;
+    }
+    const existing = settingsProfiles;
+    const nextProfiles = existing.some((profile) => profile.id === snapshot.id)
+      ? existing.map((profile) => profile.id === snapshot.id ? snapshot : profile)
+      : [snapshot, ...existing].slice(0, 60);
+    const nextSettings: ApiSettings = {
+      ...settings,
+      ...(activate ? {
+        apiUrl: snapshot.apiUrl,
+        apiKey: settings.apiKey,
+        modelId: snapshot.modelId,
+        modelName: snapshot.modelName,
+        provider: snapshot.provider,
+        temperature: snapshot.temperature,
+        maxTokens: snapshot.maxTokens,
+      } : {}),
+      profiles: nextProfiles,
+      activeProfileId: activate ? snapshot.id : settings.activeProfileId,
+    };
+    onSettingsChange(nextSettings);
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      profileId: snapshot.id,
+      status: activate ? "active" : "saved",
+      detail: activate
+        ? `已保存并激活配置档案：${snapshot.name}；没有发起网络请求。`
+        : `已保存配置档案：${snapshot.name}；当前运行时未切换。`,
+      at: Date.now(),
+    }));
+    appendRuntimeLog({
+      channel: "output",
+      title: activate ? "Provider 档案已激活" : "Provider 档案已保存",
+      detail: `${snapshot.name} · ${snapshot.modelId} · ${providerProfileHost(snapshot.apiUrl)}；未显示或新写入明文 API key。`,
+      status: activate ? "active" : "saved",
+    });
+    appendAgentThreadEvent({
+      kind: "system",
+      title: activate ? "激活 Provider 配置档案" : "保存 Provider 配置档案",
+      detail: `${snapshot.name} · ${snapshot.modelId} · ${providerDisplayLabel(snapshot.provider || "openai-compatible")}；仅更新本地 API 设置，不访问模型端点。`,
+      status: activate ? "active" : "saved",
+      contextAttachments: [createAgentThreadContextAttachment({
+        kind: "provider",
+        title: "Provider 配置档案",
+        detail: `${snapshot.name} · ${snapshot.modelId} · ${providerProfileHost(snapshot.apiUrl)}`,
+        ref: snapshot.id,
+        source: "Provider 设置中心",
+        status: activate ? "active" : "saved",
+      })],
+    });
+  };
+
+  const activateProviderProfile = (profile: ApiProfile) => {
+    const provider = profile.provider || inferProvider(profile.apiUrl);
+    onSettingsChange({
+      ...settings,
+      apiUrl: profile.apiUrl,
+      apiKey: profile.apiKey || settings.apiKey,
+      modelId: profile.modelId,
+      modelName: profile.modelName,
+      provider,
+      temperature: profile.temperature,
+      maxTokens: profile.maxTokens,
+      activeProfileId: profile.id,
+      profiles: settingsProfiles,
+    });
+    applyProviderProfileToDraft(profile);
+    markProviderDraftReviewed(`已激活配置档案：${profile.name}；未发起网络请求。`, "active");
+    appendRuntimeLog({
+      channel: "output",
+      title: "Provider 档案已激活",
+      detail: `${profile.name} · ${profile.modelId}`,
+      status: "active",
+    });
+  };
+
+  const deleteProviderProfile = (profileId: string) => {
+    const profile = settingsProfiles.find((item) => item.id === profileId);
+    const nextSettings: ApiSettings = {
+      ...settings,
+      profiles: settingsProfiles.filter((item) => item.id !== profileId),
+      activeProfileId: settings.activeProfileId === profileId ? undefined : settings.activeProfileId,
+    };
+    onSettingsChange(nextSettings);
+    setProviderConfigDraft((prev) => ({
+      ...prev,
+      profileId: prev.profileId === profileId ? "" : prev.profileId,
+      status: "deleted",
+      detail: profile ? `已删除配置档案：${profile.name}。` : "已删除配置档案。",
+      at: Date.now(),
+    }));
+    appendRuntimeLog({
+      channel: "output",
+      title: "Provider 档案已删除",
+      detail: profile ? `${profile.name} · ${profile.modelId}` : profileId,
+      status: "deleted",
+    });
+  };
+
   const capabilities = runtimeCapabilities(state);
   const matrix = toolMatrix(state);
   const enabledTools = matrix.filter((item) => item.enabled);
   const gatedTools = matrix.filter((item) => !item.enabled);
   const memory = asRecord(state.memory?.memory);
+  const memoryBackupPayload = asRecord(state.memoryBackups?.memory_backup_status);
+  const memoryBackups = asRecordList(memoryBackupPayload.backups);
+  const memoryBackupCurrent = asRecord(memoryBackupPayload.current);
   const memoryDimensions = asRecord(memory.dimensions);
   const providerCatalog = asRecord(state.provider?.provider_catalog);
   const providerGroups = asRecordList(providerCatalog.groups);
@@ -2504,6 +3378,15 @@ export function AgentControlCenter({
   const selectedApprovalStatus = asString(selectedApprovalSummary?.status, "pending");
   const selectedApprovalAction = asString(selectedApprovalSummary?.action, "unknown");
   const selectedApprovalIdValue = asString(selectedApprovalSummary?.id);
+  const selectedApprovalIsMemoryAction = ["memory_update", "memory_freeze", "memory_delete", "memory_merge", "memory_restore"].includes(selectedApprovalAction);
+  const selectedApprovalIsProviderProbe = selectedApprovalAction === "provider_probe";
+  const selectedApprovalExecutableLabel = selectedApprovalAction === "write_file"
+    ? "write_file"
+    : selectedApprovalIsMemoryAction
+      ? "Memory"
+      : selectedApprovalIsProviderProbe
+        ? "Provider probe"
+      : "";
   const localApprovalDecisionResult = approvalDecision.approvalId === selectedApprovalIdValue
     ? asRecord(asRecord(approvalDecision.result?.approval_decide).decision ?? approvalDecision.result?.approval_decide)
     : {};
@@ -2522,7 +3405,7 @@ export function AgentControlCenter({
   const selectedApprovalCanExecuteWrite = Boolean(
     state.online
       && selectedApprovalIdValue
-      && selectedApprovalAction === "write_file"
+      && (selectedApprovalAction === "write_file" || selectedApprovalIsMemoryAction || selectedApprovalIsProviderProbe)
       && !selectedApprovalIsTerminal
       && approvalDecision.status !== "running",
   );
@@ -2615,21 +3498,23 @@ export function AgentControlCenter({
     const approval = selectedApprovalSummary;
     const approvalId = asString(approval?.id);
     const action = asString(approval?.action, "unknown");
+    const isMemoryAction = ["memory_update", "memory_freeze", "memory_delete", "memory_merge", "memory_restore"].includes(action);
+    const executableLabel = action === "write_file" ? "write_file" : isMemoryAction ? "Memory" : "";
     if (!state.online || !approvalId) return;
-    if (decision === "execute" && action !== "write_file") return;
+    if (decision === "execute" && !executableLabel) return;
     const request = {
       approval_id: approvalId,
       decision,
       reason: decision === "reject"
         ? `用户在审批复核台拒绝 ${action} 审批。`
-        : `用户在审批复核台执行已排队的 write_file 审批。`,
+        : `用户在审批复核台执行已排队的 ${executableLabel} 审批。`,
     };
     const startedAt = Date.now();
     setApprovalDecision({
       approvalId,
       decision,
       status: "running",
-      detail: decision === "reject" ? "正在记录拒绝决策..." : "正在请求 Gateway 执行 write_file 审批...",
+      detail: decision === "reject" ? "正在记录拒绝决策..." : `正在请求 Gateway 执行 ${executableLabel} 审批...`,
       at: startedAt,
       request,
       result: null,
@@ -2651,7 +3536,7 @@ export function AgentControlCenter({
       const attachment = createAgentThreadContextAttachment({
         kind: "approval",
         title: `审批 ${compactApprovalId(approvalId)}`,
-        detail: `${decision === "reject" ? "拒绝" : "执行 write_file"} · ${action} · ${detail}`,
+        detail: `${decision === "reject" ? "拒绝" : `执行 ${executableLabel}`} · ${action} · ${detail}`,
         ref: approvalId,
         source: "approval_decide",
         status: rawStatus,
@@ -2659,13 +3544,13 @@ export function AgentControlCenter({
       });
       appendRuntimeLog({
         channel: "approvals",
-        title: decision === "reject" ? "审批已拒绝" : "write_file 审批执行结果",
+        title: decision === "reject" ? "审批已拒绝" : `${executableLabel} 审批执行结果`,
         detail: `${approvalId} · ${detail}`,
         status: rawStatus,
       });
       appendAgentThreadEvent({
         kind: "approval",
-        title: decision === "reject" ? "拒绝审批" : "执行 write_file 审批",
+        title: decision === "reject" ? "拒绝审批" : `执行 ${executableLabel} 审批`,
         detail: `${approvalId} · ${detail}`,
         status: rawStatus,
         approvalId,
@@ -2753,6 +3638,12 @@ export function AgentControlCenter({
     || filteredMemoryRows[0]
     || memoryRows[0]
     || null;
+  const memoryDraftDiff = memoryDraftDiffRows(
+    memoryDraftAction,
+    memoryDraftAction?.memoryId
+      ? memoryRows.find((row) => row.id === memoryDraftAction.memoryId) || selectedMemoryRow
+      : selectedMemoryRow,
+  );
 
   useEffect(() => {
     if (!memoryRows.length) {
@@ -2831,7 +3722,58 @@ export function AgentControlCenter({
     }
   }, [approvalSummaries, agentThreads]);
 
-  const createMemoryDraftAction = (kind: MemoryDraftKind, row = selectedMemoryRow) => {
+  const createMemoryDraftAction = (kind: MemoryDraftKind, row: MemoryManagerRow | null = selectedMemoryRow, backup?: JsonRecord) => {
+    if (kind === "restore") {
+      const backupName = asString(backup?.name);
+      const title = memoryDraftActionTitle(kind);
+      if (!backupName) {
+        setMemoryDraftAction({
+          kind,
+          title,
+          status: "error",
+          detail: "请先选择一个可读的记忆备份。",
+          at: Date.now(),
+          memoryId: "",
+          memoryKind: "state",
+          request: null,
+          result: null,
+        });
+        return;
+      }
+      const request: JsonRecord = {
+        action: "memory_restore",
+        purpose: "Memory Manager 恢复备份：排队审批，不直接覆盖 AutoDream。",
+        payload: {
+          backup_name: backupName,
+          reason: "从备份恢复 AutoDream 状态；提交后只进入审批队列。",
+        },
+      };
+      const detail = `已生成 memory_restore 恢复草案：${backupName}，提交后只进入审批队列。`;
+      setMemoryDraftAction({
+        kind,
+        title,
+        status: "draft",
+        detail,
+        at: Date.now(),
+        memoryId: backupName,
+        memoryKind: "state",
+        request,
+        result: null,
+      });
+      appendRuntimeLog({
+        channel: "approvals",
+        title,
+        detail,
+        status: "draft",
+      });
+      appendAgentThreadEvent({
+        kind: "note",
+        title,
+        detail,
+        status: "draft",
+      });
+      return;
+    }
     if (!row) {
       const draft: MemoryDraftActionSnapshot = {
         kind,
@@ -2998,6 +3940,49 @@ export function AgentControlCenter({
   const skillLocalRoots = asRecordList(skillLibrary.roots);
   const skillLocalSkills = asRecordList(skillLibrary.skills);
   const skillRecentEvents = asRecordList(skillPayload.recent_events);
+  const skillRouteData = asRecord(skillRoutePreview.result?.skill_route);
+  const skillRouteCoreSkills = asRecordList(skillRouteData.active_core_skills);
+  const skillRouteLocalSkills = asRecordList(skillRouteData.active_local_skills);
+  const skillRouteIsolatedSkills = asRecordList(skillRouteData.isolated_skills);
+  const skillRouteSafety = asArray(skillRouteData.safety).map((item) => String(item)).filter(Boolean);
+  const skillRouteSchema = asRecord(skillRouteData.schema);
+  const skillLibraryRows = dedupeSkillRows([
+    ...skillRouteCoreSkills.map((item) => skillRowFromRecord(item, "active")),
+    ...skillRouteLocalSkills.map((item) => skillRowFromRecord(item, "active")),
+    ...skillRouteIsolatedSkills.map((item) => skillRowFromRecord(item, "isolated")),
+    ...skillRecentActivated.map((item) => skillRowFromRecord(item, "activated")),
+    ...skillRecentCandidates.map((item) => skillRowFromRecord(item, "candidate")),
+    ...skillLocalSkills.map((item) => skillRowFromRecord(item, "local")),
+  ]);
+  const normalizedSkillSearch = skillSearch.trim().toLowerCase();
+  const skillScopeOptions = Array.from(new Set([
+    "coding",
+    "writing",
+    "research",
+    "automation",
+    "general",
+    ...skillLibraryRows.map((row) => row.scope).filter(Boolean),
+  ]));
+  const filteredSkillRows = skillLibraryRows.filter((row) => {
+    if (skillScopeFilter !== "all" && row.scope !== skillScopeFilter) return false;
+    if (normalizedSkillSearch && !row.searchable.includes(normalizedSkillSearch)) return false;
+    return true;
+  });
+  const selectedSkillRow = filteredSkillRows.find((row) => row.key === selectedSkillKey)
+    || skillLibraryRows.find((row) => row.key === selectedSkillKey)
+    || filteredSkillRows[0]
+    || skillLibraryRows[0]
+    || null;
+
+  useEffect(() => {
+    if (!skillLibraryRows.length) {
+      if (selectedSkillKey) setSelectedSkillKey(null);
+      return;
+    }
+    if (selectedSkillKey && skillLibraryRows.some((row) => row.key === selectedSkillKey)) return;
+    setSelectedSkillKey(filteredSkillRows[0]?.key || skillLibraryRows[0].key);
+  }, [skillLibraryRows, filteredSkillRows, selectedSkillKey]);
+
   const workerRecentJobs = asRecordList(workerPayload.recent_jobs);
   const workerRecentEvents = asRecordList(workerPayload.recent_events);
   const workerMergeProposals = asRecordList(workerPayload.merge_proposals);
@@ -3013,16 +3998,49 @@ export function AgentControlCenter({
   const apiReady = isConfigured(settings);
   const settingsProfiles = settings.profiles || [];
   const activeProfile = settingsProfiles.find((profile) => profile.id === settings.activeProfileId) || null;
-  const providerPayload: JsonRecord = {
-    provider: effectiveProvider,
-    api_url: settings.apiUrl,
-    model_id: settings.modelId,
-    model_name: settings.modelName,
+  const providerDraftProvider = providerConfigDraft.provider || inferProvider(providerConfigDraft.apiUrl);
+  const providerDraftEndpointLabel = displayEndpoint(providerConfigDraft.apiUrl);
+  const providerDraftEndpointLocal = isLocalEndpoint(providerConfigDraft.apiUrl);
+  const providerDraftKeyOptional = allowsEmptyApiKey(providerConfigDraft.apiUrl, providerDraftProvider);
+  const providerDraftReady = Boolean(providerConfigDraft.apiUrl.trim() && providerConfigDraft.modelId.trim());
+  const providerDraftPayload: JsonRecord = {
+    ...(providerConfigDraft.presetId ? { preset_id: providerConfigDraft.presetId } : {}),
+    provider: providerDraftProvider,
+    api_url: providerConfigDraft.apiUrl,
+    model_id: providerConfigDraft.modelId,
+    model_name: providerConfigDraft.modelName,
     api_key: settings.apiKey,
-    api_key_env: modelKeyEnv(effectiveProvider),
-    temperature: settings.temperature,
-    max_tokens: settings.maxTokens,
+    api_key_env: modelKeyEnv(providerDraftProvider),
+    temperature: numericDraftValue(providerConfigDraft.temperature, settings.temperature),
+    max_tokens: numericDraftValue(providerConfigDraft.maxTokens, settings.maxTokens),
+    timeout_seconds: Math.max(1, Math.min(30, numericDraftValue(providerConfigDraft.timeoutSeconds, 5) || 5)),
   };
+  const providerDraftStatusPayload: JsonRecord = {
+    ...providerDraftPayload,
+    execute: false,
+    allow_remote_model: false,
+  };
+  const providerDraftProbePayload: JsonRecord = {
+    ...providerDraftPayload,
+    execute: false,
+    allow_remote_model: providerConfigDraft.allowRemoteModel && !providerDraftEndpointLocal,
+  };
+  const providerDraftWorkerPayload: JsonRecord = {
+    kind: "model_task",
+    provider: providerDraftProvider,
+    api_url: providerConfigDraft.apiUrl,
+    model_id: providerConfigDraft.modelId,
+    api_key_env: modelKeyEnv(providerDraftProvider),
+    temperature: numericDraftValue(providerConfigDraft.temperature, settings.temperature),
+    max_tokens: numericDraftValue(providerConfigDraft.maxTokens, settings.maxTokens),
+    timeout_seconds: Math.max(1, Math.min(45, numericDraftValue(providerConfigDraft.timeoutSeconds, 5) || 5)),
+    execute_model: false,
+    allow_remote_model: false,
+    stream_model: false,
+  };
+  const redactedProviderDraftPayload = redactedProviderPayload(providerDraftPayload);
+  const redactedProviderDraftProbePayload = redactedProviderPayload(providerDraftProbePayload);
+  const redactedProviderDraftWorkerPayload = redactedProviderPayload(providerDraftWorkerPayload);
   const frontendProviderRecords = PROVIDER_PRESETS.map(providerPresetRecord);
   const frontendProviderGroups = Object.entries(frontendProviderRecords.reduce<Record<string, number>>((acc, preset) => {
     const group = asString(preset.group, "global");
@@ -3032,6 +4050,7 @@ export function AgentControlCenter({
   const frontendLocalCount = frontendProviderRecords.filter((preset) => asBoolean(preset.local)).length;
   const frontendRemoteCount = frontendProviderRecords.length - frontendLocalCount;
   const displayProviderPresets = providerPresets.length ? providerPresets : frontendProviderRecords.slice(0, 20);
+  const providerPresetOptions = providerPresets.length ? providerPresets : frontendProviderRecords;
   const displayProviderGroups = providerGroups.length
     ? providerGroups.map((group) => ({ id: asString(group.id, asString(group.label)), label: asString(group.label, asString(group.id, "group")), count: asNumber(group.count) }))
     : frontendProviderGroups;
@@ -3051,6 +4070,26 @@ export function AgentControlCenter({
   const providerActionPolicy = asRecord(providerActionResult.policy);
   const providerActionWorkerPayload = asRecord(providerActionResult.model_worker_payload);
   const providerActionEnv = asRecord(providerActionResult.env);
+  const runProviderDraftStatus = () => {
+    markProviderDraftReviewed("正在用配置草案请求 provider_status；这是只读检查，不访问模型端点。", "running");
+    void runProviderAction("Provider 配置草案状态", "provider_status", providerDraftStatusPayload);
+  };
+  const runProviderDraftProbe = () => {
+    markProviderDraftReviewed("正在生成 provider_probe 审批草案；请求不包含 execute=true，不会访问模型端点。", "approval_required");
+    void runProviderAction("Provider 探针审批草案", "provider_probe", providerDraftProbePayload);
+  };
+  const attachProviderDraftToThread = () => {
+    const detail = `${providerDisplayLabel(providerDraftProvider)} · ${providerDraftEndpointLabel} · ${providerConfigDraft.modelId || "模型未设置"}`;
+    appendAgentThreadContextAttachments([createAgentThreadContextAttachment({
+      kind: "provider",
+      title: "Provider 配置草案",
+      detail,
+      ref: `${providerDraftProvider}:${providerConfigDraft.modelId || "model"}`,
+      source: "Provider 设置中心",
+      status: providerDraftReady ? "ready" : "setup-needed",
+    })], "挂载 Provider 草案");
+    markProviderDraftReviewed("Provider 配置草案已挂入当前 Agent 线程；仅作为 thread_context 附件，不保存 API 设置。", "attached");
+  };
   const hardCancelableJobs = workerRecentJobs.filter((job) => asBoolean(job.hard_cancel_supported)).length;
   const activeDomain = activeWorkspace ? activeWorkspace.domain : "Agent OS";
   const phaseBlueprint = [
@@ -3147,6 +4186,222 @@ export function AgentControlCenter({
         max_items: 12,
       },
     };
+  };
+  const buildWorkspaceThreadContextItems = (workspace: WorkspaceManagerRow) => {
+    const permissionProfile = workspacePermissionProfiles[workspace.book.id] || defaultWorkspacePermissionProfile(workspace.book.id);
+    const skillSet = workspaceSkillSets[workspace.book.id] || defaultWorkspaceSkillSet(workspace.book.id);
+    const skillLabelForKey = (key: string) => skillLibraryRows.find((row) => row.key === key)?.label || key;
+    const enabledSkillLabels = skillSet.enabledSkillKeys.slice(0, 8).map(skillLabelForKey);
+    const disabledSkillLabels = skillSet.disabledSkillKeys.slice(0, 8).map(skillLabelForKey);
+    const recentFiles = [...workspace.book.workspace.files]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 5)
+      .map((file, index) => asRecord({
+        id: `workspace-file-${workspace.book.id}-${file.id}`,
+        kind: "file",
+        dimension: "file",
+        title: file.title || `文件 ${index + 1}`,
+        summary: `${file.category || "未分组"} · ${workspaceFileVirtualPath(workspace.book, file)} · ${formatNumber(wordCount(file.content).total)} 字 · ${file.summary || htmlToPlainText(file.content).slice(0, 160)}`,
+        ref: file.id,
+        source: workspace.title,
+        status: "read-only",
+        at: file.updatedAt,
+        injected_by: "workspace_context_pack",
+      }));
+    const workspaceThreads = agentThreads
+      .filter((thread) => thread.workspaceId === workspace.book.id && !thread.archivedAt)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 4)
+      .map((thread) => asRecord({
+        id: `workspace-thread-${thread.id}`,
+        kind: "worker",
+        dimension: "thread",
+        title: thread.title,
+        summary: `${thread.status} · ${thread.summary || thread.task || "暂无摘要"} · 审批 ${thread.approvalCount} · 上下文 ${thread.contextAttachments.length}`,
+        ref: thread.id,
+        source: workspace.title,
+        status: thread.status,
+        at: thread.updatedAt,
+        injected_by: "workspace_context_pack",
+      }));
+    return [
+      asRecord({
+        id: `workspace-${workspace.book.id}`,
+        kind: "workspace",
+        dimension: "project",
+        title: workspace.title,
+        summary: `${workspace.domain} · ${workspace.files} 个文件 · ${formatNumber(workspace.words)} 字 · ${workspace.categoryCount} 个分组 · ${workspace.description}`,
+        ref: workspace.book.id,
+        source: "Multi Workspace Manager",
+        status: "selected",
+        at: workspace.updatedAt,
+        injected_by: "workspace_context_pack",
+      }),
+      ...recentFiles,
+      ...workspaceThreads,
+      asRecord({
+        id: `workspace-permission-${workspace.book.id}`,
+        kind: "workspace",
+        dimension: "permission_profile",
+        title: "工作区权限 profile",
+        summary: [
+          `读文件 ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.readFiles]}`,
+          `写文件 ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.writeFiles]}`,
+          `终端 ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.runCommands]}`,
+          `远程模型 ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.remoteModels]}`,
+          `MCP ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.mcpCalls]}`,
+          `Skill runtime ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.skillRuntime]}`,
+          `Scheduler ${WORKSPACE_PERMISSION_LEVEL_LABELS[permissionProfile.scheduler]}`,
+          permissionProfile.notes ? `备注 ${permissionProfile.notes.slice(0, 160)}` : "",
+        ].filter(Boolean).join(" · "),
+        ref: workspace.book.id,
+        source: "Workspace Permission Profile",
+        status: "policy",
+        at: permissionProfile.updatedAt || Date.now(),
+        injected_by: "workspace_permission_profile",
+      }),
+      asRecord({
+        id: `workspace-skills-${workspace.book.id}`,
+        kind: "skill",
+        dimension: "workspace_skill_set",
+        title: "工作区 Skills 集",
+        summary: [
+          `启用 ${enabledSkillLabels.length ? enabledSkillLabels.join(" / ") : "未指定"}`,
+          `禁用 ${disabledSkillLabels.length ? disabledSkillLabels.join(" / ") : "未指定"}`,
+          skillSet.notes ? `备注 ${skillSet.notes.slice(0, 180)}` : "",
+          "Skill runtime 仍需 --execute-skill 与 payload.execute=true",
+        ].filter(Boolean).join(" · "),
+        ref: workspace.book.id,
+        source: "Workspace Skills Set",
+        status: skillSet.updatedAt ? "policy" : "default",
+        at: skillSet.updatedAt || Date.now(),
+        enabled_skill_keys: skillSet.enabledSkillKeys,
+        disabled_skill_keys: skillSet.disabledSkillKeys,
+        injected_by: "workspace_skill_set",
+      }),
+    ];
+  };
+  const buildWorkspaceContextPackPayload = (workspace: WorkspaceManagerRow, task?: string): JsonRecord => {
+    const domain = workspace.domain.toLowerCase().includes("writing") || workspace.domain.includes("写作") ? "writing" : "research";
+    const workspaceSkillSet = workspaceSkillSets[workspace.book.id] || defaultWorkspaceSkillSet(workspace.book.id);
+    const workspaceThreadItems = buildWorkspaceThreadContextItems(workspace);
+    return {
+      task: task || `为工作区「${workspace.title}」构建可审查 context_pack，准备后续 Agent 任务。`,
+      domain,
+      dimension: "project",
+      limit: 8,
+      active_skill_keys: workspaceSkillSet.enabledSkillKeys,
+      workspace_skill_set: {
+        enabled_skill_keys: workspaceSkillSet.enabledSkillKeys,
+        disabled_skill_keys: workspaceSkillSet.disabledSkillKeys,
+        notes: workspaceSkillSet.notes,
+        execution: "context-only-no-skill-runtime",
+      },
+      thread_id: activeThread?.id || "",
+      thread_title: activeThread?.title || "",
+      workspace_id: workspace.book.id,
+      approval_ids: activeThread?.approvalIds || [],
+      thread_context: mergeDraftContextItems(workspaceThreadItems, activeThreadContextItems()).slice(0, 12),
+      thread_context_policy: {
+        mode: "workspace-compact-attachments",
+        execution: "read-only-no-file-write",
+        max_items: 12,
+        source: "Multi Workspace Manager",
+      },
+    };
+  };
+  const recordWorkspaceContextPackHistory = (snapshot: WorkspaceContextPackSnapshot) => {
+    if (!snapshot.workspaceId || !snapshot.contextItems.length) return;
+    setWorkspaceContextPackHistory((prev) => {
+      const normalized = normalizeWorkspaceContextPackSnapshot({
+        ...snapshot,
+        id: snapshot.id || `workspace-context-pack-${snapshot.workspaceId}-${snapshot.at || Date.now()}-${uid()}`,
+      });
+      if (!normalized) return prev;
+      const next = [
+        normalized,
+        ...prev.filter((item) => item.id !== normalized.id),
+      ].sort((a, b) => b.at - a.at);
+      return next.slice(0, 40);
+    });
+  };
+  const updateWorkspacePermissionProfile = (
+    workspaceId: string,
+    patch: Partial<Omit<WorkspacePermissionProfile, "workspaceId" | "updatedAt">>,
+  ) => {
+    setWorkspacePermissionProfiles((prev) => {
+      const current = prev[workspaceId] || defaultWorkspacePermissionProfile(workspaceId);
+      return {
+        ...prev,
+        [workspaceId]: {
+          ...current,
+          ...patch,
+          workspaceId,
+          updatedAt: Date.now(),
+        },
+      };
+    });
+  };
+  const resetWorkspacePermissionProfile = (workspaceId: string) => {
+    setWorkspacePermissionProfiles((prev) => {
+      const next = { ...prev };
+      delete next[workspaceId];
+      return next;
+    });
+  };
+  const updateWorkspaceSkillSet = (
+    workspaceId: string,
+    patch: Partial<Omit<WorkspaceSkillSet, "workspaceId" | "updatedAt">>,
+  ) => {
+    setWorkspaceSkillSets((prev) => {
+      const current = prev[workspaceId] || defaultWorkspaceSkillSet(workspaceId);
+      return {
+        ...prev,
+        [workspaceId]: {
+          ...current,
+          ...patch,
+          workspaceId,
+          updatedAt: Date.now(),
+        },
+      };
+    });
+  };
+  const addWorkspaceSkillKey = (workspaceId: string, key: string, mode: "enabled" | "disabled") => {
+    const current = workspaceSkillSets[workspaceId] || defaultWorkspaceSkillSet(workspaceId);
+    if (mode === "enabled") {
+      updateWorkspaceSkillSet(workspaceId, {
+        enabledSkillKeys: Array.from(new Set([key, ...current.enabledSkillKeys])).slice(0, 24),
+        disabledSkillKeys: current.disabledSkillKeys.filter((item) => item !== key),
+      });
+      return;
+    }
+    updateWorkspaceSkillSet(workspaceId, {
+      disabledSkillKeys: Array.from(new Set([key, ...current.disabledSkillKeys])).slice(0, 24),
+      enabledSkillKeys: current.enabledSkillKeys.filter((item) => item !== key),
+    });
+  };
+  const removeWorkspaceSkillKey = (workspaceId: string, key: string) => {
+    const current = workspaceSkillSets[workspaceId] || defaultWorkspaceSkillSet(workspaceId);
+    updateWorkspaceSkillSet(workspaceId, {
+      enabledSkillKeys: current.enabledSkillKeys.filter((item) => item !== key),
+      disabledSkillKeys: current.disabledSkillKeys.filter((item) => item !== key),
+    });
+  };
+  const resetWorkspaceSkillSet = (workspaceId: string) => {
+    setWorkspaceSkillSets((prev) => {
+      const next = { ...prev };
+      delete next[workspaceId];
+      return next;
+    });
+  };
+  const restoreWorkspaceContextPackSnapshot = (snapshot: WorkspaceContextPackSnapshot) => {
+    setWorkspaceContextPack(snapshot);
+    appendRuntimeLog({
+      channel: "output",
+      title: "恢复工作区 context_pack",
+      detail: `${snapshot.workspaceTitle} · ${snapshot.contextItems.length} 条上下文 · ${formatDateTime(snapshot.at)}`,
+      status: "restored",
+    });
   };
   const buildCommandWorkerPayload = (task: string, mode: "preview" | "run" = "preview"): JsonRecord => {
     const domain = commandDomain();
@@ -4325,6 +5580,123 @@ export function AgentControlCenter({
     });
   };
 
+  const syncSpecProtocolFiles = async () => {
+    const draftFiles = specProtocolDraft.files.length ? specProtocolDraft.files : buildSpecProtocolFiles();
+    const request: JsonRecord = {
+      action: "read_file",
+      purpose: "读取现有 Specs / Steering / Hooks 协议文件，只读审查，不写入。",
+      files: draftFiles.map((file) => ({
+        path: file.path,
+        kind: file.kind,
+        access_profile: "workspace",
+      })),
+    };
+    if (!state.online) {
+      const detail = "Gateway 离线，无法同步现有 Specs / Steering / Hooks 协议。";
+      setSpecProtocolSync({
+        status: "error",
+        detail,
+        at: Date.now(),
+        files: [],
+        request,
+        result: null,
+      });
+      setQuickAction({ label: "同步协议文件", status: "error", detail });
+      return;
+    }
+    setSpecProtocolSync({
+      status: "running",
+      detail: `正在只读读取 ${draftFiles.length} 个协议文件。`,
+      at: Date.now(),
+      files: [],
+      request,
+      result: null,
+    });
+    setQuickAction({ label: "同步协议文件", status: "running", detail: "正在读取 .lumen 协议文件。" });
+    appendRuntimeLog({
+      channel: "gateway",
+      title: "同步 Specs 协议",
+      detail: draftFiles.map((file) => file.path).join(" / "),
+      status: "running",
+    });
+    try {
+      const results: JsonRecord[] = [];
+      const files: SpecProtocolExistingFile[] = [];
+      for (const file of draftFiles) {
+        const payload: JsonRecord = {
+          path: file.path,
+          access_profile: "workspace",
+        };
+        try {
+          const result = await bridgeAction("read_file", payload, { execute: true });
+          const status = asString(result.status, "ok");
+          const content = asString(result.content);
+          results.push({ path: file.path, kind: file.kind, status, result });
+          files.push({
+            ...file,
+            content,
+            status,
+            detail: status === "ok" ? "已读取现有协议文件。" : asString(result.message, status),
+            target: asString(result.target),
+            result,
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "读取失败";
+          results.push({ path: file.path, kind: file.kind, status: "missing", detail });
+          files.push({
+            ...file,
+            content: "",
+            status: "missing",
+            detail,
+            target: file.path,
+            result: null,
+          });
+        }
+      }
+      const existingCount = files.filter((file) => file.status === "ok").length;
+      const detail = existingCount
+        ? `已同步 ${existingCount}/${files.length} 个现有协议文件，可与当前草案对比。`
+        : "当前工作区还没有落地的 .lumen 协议文件；可先生成草案并提交 write_file 审批。";
+      const status = existingCount ? "ok" : "empty";
+      setSpecProtocolSync({
+        status,
+        detail,
+        at: Date.now(),
+        files,
+        request,
+        result: { files: results },
+      });
+      setQuickAction({ label: "同步协议文件", status, detail });
+      appendRuntimeLog({
+        channel: "gateway",
+        title: "Specs 协议同步完成",
+        detail,
+        status,
+      });
+      appendAgentThreadEvent({
+        kind: "note",
+        title: "同步 Specs 协议",
+        detail,
+        status,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Specs / Steering / Hooks 同步失败";
+      setSpecProtocolSync((prev) => ({
+        ...prev,
+        status: "error",
+        detail,
+        at: Date.now(),
+      }));
+      setQuickAction({ label: "同步协议文件", status: "error", detail });
+      appendRuntimeLog({
+        channel: "gateway",
+        title: "Specs 协议同步失败",
+        detail,
+        status: "error",
+      });
+    }
+  };
+
   const submitSpecProtocolApprovals = async () => {
     const files = specProtocolDraft.files.length ? specProtocolDraft.files : buildSpecProtocolFiles();
     if (!state.online) {
@@ -4789,6 +6161,35 @@ export function AgentControlCenter({
       { path: ".lumen/hooks/lumenos-hooks.md", title: "Hooks", kind: "hook", content: hooks },
     ];
   };
+  const specProtocolDraftFiles = specProtocolDraft.files.length ? specProtocolDraft.files : buildSpecProtocolFiles();
+  const specProtocolExistingByPath = new Map(specProtocolSync.files.map((file) => [file.path, file]));
+  const specProtocolDiffRows: SpecProtocolDiffRow[] = specProtocolDraftFiles.map((file) => {
+    const existing = specProtocolExistingByPath.get(file.path);
+    const before = existing?.content || "";
+    const diff = buildLineDiff(before, file.content);
+    const added = diff.filter((line) => line.type === "add").length;
+    const removed = diff.filter((line) => line.type === "remove").length;
+    const existingStatus = existing?.status || "not_synced";
+    const unchanged = Boolean(existing && before === file.content);
+    return {
+      path: file.path,
+      title: file.title,
+      kind: file.kind,
+      status: !existing ? "not_synced" : unchanged ? "unchanged" : existingStatus === "ok" ? "modified" : "new",
+      detail: !existing
+        ? "尚未同步现有协议。"
+        : unchanged
+          ? "当前草案与已落地协议一致。"
+          : existingStatus === "ok"
+            ? `${added} 行新增 / ${removed} 行移除。`
+            : "现有文件未读取到，当前草案会作为新协议进入审批。",
+      beforeLength: before.length,
+      afterLength: file.content.length,
+      added,
+      removed,
+      diff,
+    };
+  });
   const agentModelTaskReady = Boolean((threadComposer.trim() || commandTask.trim() || activeThread?.task || "").trim());
   const agentModelWorkerRunning = ["queued", "starting", "running"].includes(agentModelWorker.status);
   const agentModelGateDetail = apiReady
@@ -4823,8 +6224,10 @@ export function AgentControlCenter({
       files: activeWorkspaceFiles
         .filter((file) => {
           if ((file.category || "未分组") !== category) return false;
+          const virtualPath = activeWorkspace ? workspaceFileVirtualPath(activeWorkspace.book, file) : "";
           if (!normalizedExplorerSearch) return true;
           const searchable = [
+            virtualPath,
             file.title,
             file.category,
             file.summary,
@@ -4835,6 +6238,7 @@ export function AgentControlCenter({
         })
         .map((file) => ({
           file,
+          path: activeWorkspace ? workspaceFileVirtualPath(activeWorkspace.book, file) : file.title || file.id,
           words: wordCount(file.content).total,
           selected: file.id === (selectedExplorerFileId || activeWorkspace?.book.workspace.selectedFileId),
         })),
@@ -4849,21 +6253,465 @@ export function AgentControlCenter({
       ? selectedExplorerFile.altText || selectedExplorerFile.summary || "图片素材，当前预览只显示元数据。"
       : htmlToPlainText(selectedExplorerFile.content).trim() || selectedExplorerFile.summary || "空文件"
     : "";
+  const selectedExplorerPath = activeWorkspace && selectedExplorerFile
+    ? workspaceFileVirtualPath(activeWorkspace.book, selectedExplorerFile)
+    : "";
   const filteredExplorerFileCount = workspaceFileGroups.reduce((sum, group) => sum + group.files.length, 0);
   const recentWorkspaceFiles = [...activeWorkspaceFiles]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 5)
     .map((file) => ({
       file,
+      path: activeWorkspace ? workspaceFileVirtualPath(activeWorkspace.book, file) : file.title || file.id,
       words: wordCount(file.content).total,
     }));
-  const openExplorerFileInEditor = (fileId = selectedExplorerFile?.id) => {
-    if (!activeWorkspace) return;
+  const crossWorkspaceFiles = useMemo<CrossWorkspaceFileRow[]>(() => {
+    const rows: CrossWorkspaceFileRow[] = [];
+    allWorkspaceSummaries.forEach((workspace) => {
+      workspace.book.workspace.files.forEach((file) => {
+        const virtualPath = workspaceFileVirtualPath(workspace.book, file);
+        const searchable = [
+          virtualPath,
+          workspace.title,
+          workspace.domain,
+          file.title,
+          file.category,
+          file.summary,
+          file.kind,
+          file.kind === "image" ? file.altText : htmlToPlainText(file.content),
+        ].filter(Boolean).join("\n").toLowerCase();
+        if (normalizedExplorerSearch && !searchable.includes(normalizedExplorerSearch)) return;
+        rows.push({
+          book: workspace.book,
+          workspaceTitle: workspace.title,
+          workspaceDomain: workspace.domain,
+          workspaceIcon: workspace.icon,
+          file,
+          path: virtualPath,
+          words: wordCount(file.content).total,
+          selected: workspace.book.id === activeWorkspace?.book.id && file.id === selectedExplorerFile?.id,
+        });
+      });
+    });
+    return rows.sort((a, b) => b.file.updatedAt - a.file.updatedAt).slice(0, 18);
+  }, [activeWorkspace?.book.id, allWorkspaceSummaries, normalizedExplorerSearch, selectedExplorerFile?.id]);
+  const crossWorkspaceRecentRows = useMemo<CrossWorkspaceFileRow[]>(() => crossWorkspaceRecents
+    .map((entry) => {
+      const workspace = workspaceSummaryById.get(entry.bookId);
+      const file = workspace?.book.workspace.files.find((item) => item.id === entry.fileId);
+      if (!workspace || !file) return null;
+      return {
+        book: workspace.book,
+        workspaceTitle: workspace.title,
+        workspaceDomain: workspace.domain,
+        workspaceIcon: workspace.icon,
+        file,
+        path: workspaceFileVirtualPath(workspace.book, file),
+        words: wordCount(file.content).total,
+        selected: workspace.book.id === activeWorkspace?.book.id && file.id === selectedExplorerFile?.id,
+      } satisfies CrossWorkspaceFileRow;
+    })
+    .filter((row): row is CrossWorkspaceFileRow => Boolean(row))
+    .slice(0, 8), [activeWorkspace?.book.id, crossWorkspaceRecents, selectedExplorerFile?.id, workspaceSummaryById]);
+  const workspaceDomainOptions = useMemo(() => {
+    const domains = Array.from(new Set(allWorkspaceSummaries.map((item) => item.domain).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, "zh-CN"));
+    return ["all", ...domains];
+  }, [allWorkspaceSummaries]);
+  const workspaceManagerRows = useMemo<WorkspaceManagerRow[]>(() => {
+    const normalizedSearch = workspaceManagerSearch.trim().toLowerCase();
+    return allWorkspaceSummaries
+      .map((item) => {
+        const workspaceThreads = agentThreads.filter((thread) => thread.workspaceId === item.book.id);
+        const activeThreads = workspaceThreads.filter((thread) => !thread.archivedAt);
+        const contextAttachmentCount = workspaceThreads.reduce((sum, thread) => sum + thread.contextAttachments.length, 0);
+        const approvalCount = workspaceThreads.reduce((sum, thread) => sum + thread.approvalCount, 0);
+        const recentRows = crossWorkspaceRecentRows.filter((row) => row.book.id === item.book.id);
+        const latestFile = [...item.book.workspace.files].sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
+        const searchable = [
+          item.title,
+          item.domain,
+          item.description,
+          item.book.id,
+          ...(item.book.workspace.categories || []),
+          ...item.book.workspace.files.flatMap((file) => [
+            file.title,
+            file.category,
+            file.summary,
+            file.kind,
+            workspaceFileVirtualPath(item.book, file),
+          ]),
+          ...workspaceThreads.flatMap((thread) => [thread.title, thread.task, thread.summary, thread.status]),
+        ].filter(Boolean).join("\n").toLowerCase();
+        return {
+          ...item,
+          activeThreadCount: activeThreads.length,
+          archivedThreadCount: workspaceThreads.length - activeThreads.length,
+          contextAttachmentCount,
+          approvalCount,
+          recentCount: recentRows.length,
+          latestFile,
+          latestFilePath: latestFile ? workspaceFileVirtualPath(item.book, latestFile) : "",
+          updatedAt: Math.max(item.book.updatedAt, latestFile?.updatedAt || 0, ...workspaceThreads.map((thread) => thread.updatedAt)),
+          searchable,
+        };
+      })
+      .filter((item) => workspaceDomainFilter === "all" || item.domain === workspaceDomainFilter)
+      .filter((item) => !normalizedSearch || item.searchable.includes(normalizedSearch))
+      .sort((a, b) => Number(b.book.id === activeWorkspace?.book.id) - Number(a.book.id === activeWorkspace?.book.id) || b.updatedAt - a.updatedAt);
+  }, [activeWorkspace?.book.id, agentThreads, allWorkspaceSummaries, crossWorkspaceRecentRows, workspaceDomainFilter, workspaceManagerSearch]);
+  const selectedWorkspaceManagerRow = workspaceManagerRows.find((item) => item.book.id === activeWorkspace?.book.id)
+    || workspaceManagerRows[0]
+    || null;
+  const selectedWorkspaceRecentRows = selectedWorkspaceManagerRow
+    ? crossWorkspaceRecentRows.filter((row) => row.book.id === selectedWorkspaceManagerRow.book.id)
+    : [];
+  const selectedWorkspaceThreads = selectedWorkspaceManagerRow
+    ? agentThreads
+      .filter((thread) => thread.workspaceId === selectedWorkspaceManagerRow.book.id && !thread.archivedAt)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 5)
+    : [];
+  const selectedWorkspaceContextPackHistory = selectedWorkspaceManagerRow
+    ? workspaceContextPackHistory.filter((item) => item.workspaceId === selectedWorkspaceManagerRow.book.id).slice(0, 5)
+    : [];
+  const selectedWorkspacePermissionProfile = selectedWorkspaceManagerRow
+    ? workspacePermissionProfiles[selectedWorkspaceManagerRow.book.id] || defaultWorkspacePermissionProfile(selectedWorkspaceManagerRow.book.id)
+    : null;
+  const selectedWorkspaceSkillSet = selectedWorkspaceManagerRow
+    ? workspaceSkillSets[selectedWorkspaceManagerRow.book.id] || defaultWorkspaceSkillSet(selectedWorkspaceManagerRow.book.id)
+    : null;
+  const workspaceEnabledSkillRows = selectedWorkspaceSkillSet
+    ? selectedWorkspaceSkillSet.enabledSkillKeys
+      .map((key) => skillLibraryRows.find((row) => row.key === key) || null)
+      .filter((row): row is SkillLibraryRow => Boolean(row))
+    : [];
+  const workspaceDisabledSkillRows = selectedWorkspaceSkillSet
+    ? selectedWorkspaceSkillSet.disabledSkillKeys
+      .map((key) => skillLibraryRows.find((row) => row.key === key) || null)
+      .filter((row): row is SkillLibraryRow => Boolean(row))
+    : [];
+  const workspaceSkillCandidates = selectedWorkspaceSkillSet
+    ? skillLibraryRows
+      .filter((row) => !selectedWorkspaceSkillSet.enabledSkillKeys.includes(row.key) && !selectedWorkspaceSkillSet.disabledSkillKeys.includes(row.key))
+      .slice(0, 8)
+    : [];
+  const recordCrossWorkspaceRecent = (bookId: string, fileId: string) => {
+    setCrossWorkspaceRecents((prev) => {
+      const next: CrossWorkspaceRecentEntry[] = [
+        { id: `${bookId}:${fileId}`, bookId, fileId, openedAt: Date.now() },
+        ...prev.filter((entry) => !(entry.bookId === bookId && entry.fileId === fileId)),
+      ];
+      return next.slice(0, 24);
+    });
+  };
+  const openExplorerFileInEditor = (fileId = selectedExplorerFile?.id, bookId = activeWorkspace?.book.id) => {
+    if (!bookId) return;
+    if (fileId) recordCrossWorkspaceRecent(bookId, fileId);
     if (fileId && onOpenBookFile) {
-      onOpenBookFile(activeWorkspace.book.id, fileId);
+      onOpenBookFile(bookId, fileId);
       return;
     }
-    onOpenBook(activeWorkspace.book.id);
+    onOpenBook(bookId);
+  };
+  const selectCrossWorkspaceFile = (row: CrossWorkspaceFileRow) => {
+    const external = row.book.id !== activeWorkspace?.book.id;
+    if (external) {
+      openExplorerFileInEditor(row.file.id, row.book.id);
+      return;
+    }
+    setSelectedExplorerFileId(row.file.id);
+    appendRuntimeLog({
+      channel: "output",
+      title: "跨工作区定位",
+      detail: `${row.workspaceTitle} / ${row.file.title || "未命名文件"}`,
+      status: "selected",
+    });
+  };
+
+  const buildWorkspaceFileDraft = (kind: WorkspaceFileDraftKind, source = selectedExplorerFile) => {
+    if (!activeWorkspace) {
+      setWorkspaceFileDraft({
+        kind,
+        status: "error",
+        detail: "请先选择一个工作区。",
+        at: Date.now(),
+        path: "",
+        title: "",
+        content: "",
+        request: null,
+        result: null,
+      });
+      return;
+    }
+    const workspaceSlug = workspaceDraftSafeSegment(activeWorkspace.title, activeWorkspace.book.id);
+    const now = new Date().toLocaleString("zh-CN");
+    const sourceTitle = source?.title || "未命名文件";
+    const sourceCategory = source?.category || "未分组";
+    const baseName = workspaceDraftSafeSegment(sourceTitle, "untitled");
+    const categoryFiles = activeWorkspaceFiles.filter((file) => (file.category || "未分组") === sourceCategory);
+    const pathIndexRows = [...activeWorkspaceFiles]
+      .sort((a, b) => {
+        const byCategory = (a.category || "未分组").localeCompare(b.category || "未分组", "zh-CN");
+        if (byCategory) return byCategory;
+        return (a.title || "").localeCompare(b.title || "", "zh-CN");
+      })
+      .map((file, index) => ({
+        index: index + 1,
+        file,
+        path: workspaceFileVirtualPath(activeWorkspace.book, file),
+        words: wordCount(file.content).total,
+      }));
+    const pathIndexContent = [
+      `# ${activeWorkspace.title} 文件路径索引草案`,
+      "",
+      `生成时间：${now}`,
+      `工作区：${activeWorkspace.title}`,
+      `文件数量：${pathIndexRows.length}`,
+      "",
+      "## 索引表",
+      "",
+      "| # | 虚拟路径 | 分类 | 类型 | 字数 | 更新时间 | 版本 |",
+      "|---:|---|---|---|---:|---|---:|",
+      ...pathIndexRows.map((row) => [
+        `| ${row.index}`,
+        `\`${row.path}\``,
+        row.file.category || "未分组",
+        row.file.kind || "text",
+        row.words,
+        formatDateTime(row.file.updatedAt),
+        row.file.history?.length || 0,
+      ].join(" | ") + " |"),
+      "",
+      "## 审批边界",
+      "",
+      "- 该索引由 Workspace Explorer 根据当前 Library 派生，只包含路径和元数据，不复制正文。",
+      "- 提交后只进入 Gateway write_file 审批队列，不创建真实目录、不改写原工作区文件。",
+      "- 后续真实文件路径映射、多文件 diff 和目录级批量草案应以该索引作为审查基线。",
+      "",
+    ].join("\n");
+    const categoryArchiveContent = [
+      `# ${sourceCategory} 分组归档草案`,
+      "",
+      `归档时间：${now}`,
+      `工作区：${activeWorkspace.title}`,
+      `来源分组：${sourceCategory}`,
+      `文件数量：${categoryFiles.length}`,
+      "",
+      "## 文件快照",
+      "",
+      ...categoryFiles.map((file, index) => {
+        const filePath = activeWorkspace ? workspaceFileVirtualPath(activeWorkspace.book, file) : file.title || file.id;
+        const text = file.kind === "image"
+          ? file.altText || file.summary || "图片素材，当前归档只保留元数据。"
+          : htmlToPlainText(file.content).trim() || file.summary || "空文件";
+        return [
+          `### ${index + 1}. ${file.title || "未命名文件"}`,
+          "",
+          `- 类型：${file.kind || "text"}`,
+          `- 虚拟路径：${filePath}`,
+          `- 更新时间：${formatDateTime(file.updatedAt)}`,
+          `- 字数：${formatNumber(wordCount(file.content).total)}`,
+          `- 版本数：${file.history?.length || 0}`,
+          "",
+          text,
+          "",
+        ].join("\n");
+      }),
+      "## 审批边界",
+      "",
+      "- 该分组归档由 Workspace Explorer 生成为 write_file 审批草案。",
+      "- 未经审批执行，不会写入工作区、不会移动文件、不会删除原文件。",
+      "",
+    ].join("\n");
+    const path = kind === "create"
+      ? `workspace-drafts/${workspaceSlug}/new-file-${Date.now()}.md`
+      : kind === "clone"
+        ? `workspace-drafts/${workspaceSlug}/${baseName}-clone-${Date.now()}.md`
+        : kind === "archive"
+          ? `workspace-drafts/${workspaceSlug}/archive/${baseName}-${Date.now()}.md`
+          : kind === "category_archive"
+            ? `workspace-drafts/${workspaceSlug}/archive/${workspaceDraftSafeSegment(sourceCategory, "category")}-category-${Date.now()}.md`
+            : `workspace-drafts/${workspaceSlug}/indexes/file-path-index-${Date.now()}.md`;
+    const content = kind === "create"
+      ? [
+        `# ${activeWorkspace.title} 新文件草案`,
+        "",
+        `创建时间：${now}`,
+        `工作区：${activeWorkspace.title}`,
+        "",
+        "## 目标",
+        "- 在这里补充新文件内容。",
+        "",
+        "## 审批边界",
+        "- 该文件由 Workspace Explorer 生成为 write_file 审批草案。",
+        "- 未经审批执行，不会写入工作区或修改现有文件。",
+        "",
+      ].join("\n")
+      : kind === "clone"
+        ? [
+          `# ${sourceTitle} 克隆草案`,
+          "",
+          `创建时间：${now}`,
+          `来源文件：${sourceTitle}`,
+          `来源分类：${source?.category || "未分组"}`,
+          `来源路径：${source && activeWorkspace ? workspaceFileVirtualPath(activeWorkspace.book, source) : ""}`,
+          "",
+        selectedExplorerText,
+        "",
+      ].join("\n")
+        : kind === "archive"
+          ? [
+          `# ${sourceTitle} 归档快照`,
+          "",
+          `归档时间：${now}`,
+          `来源文件：${sourceTitle}`,
+          `来源分类：${source?.category || "未分组"}`,
+          `来源路径：${source && activeWorkspace ? workspaceFileVirtualPath(activeWorkspace.book, source) : ""}`,
+          `来源版本数：${source?.history?.length || 0}`,
+          "",
+          "## 原文快照",
+          "",
+          selectedExplorerText,
+          "",
+        ].join("\n")
+          : kind === "category_archive"
+            ? categoryArchiveContent
+            : pathIndexContent;
+    const title = kind === "create"
+      ? "新建文件草案"
+      : kind === "clone"
+        ? "克隆文件草案"
+        : kind === "archive"
+          ? "归档快照草案"
+          : kind === "category_archive"
+            ? "分组归档草案"
+            : "路径索引草案";
+    const detail = `${title}已生成：${path}。提交后只进入 write_file 审批队列。`;
+    const request: JsonRecord = {
+      action: "write_file",
+      purpose: `Workspace Explorer ${title}；只进入 Gateway write_file 审批，不直接改工作区。`,
+      payload: {
+        path,
+        mode: "replace",
+        access_profile: "workspace",
+        content_length: content.length,
+      },
+    };
+    setWorkspaceFileDraft({
+      kind,
+      status: "draft",
+      detail,
+      at: Date.now(),
+      path,
+      title,
+      content,
+      request,
+      result: null,
+    });
+    appendRuntimeLog({
+      channel: "approvals",
+      title,
+      detail,
+      status: "draft",
+    });
+    appendAgentThreadEvent({
+      kind: "note",
+      title,
+      detail,
+      status: "draft",
+    });
+  };
+
+  const submitWorkspaceFileDraftApproval = async () => {
+    if (!workspaceFileDraft?.path || !workspaceFileDraft.content) {
+      setWorkspaceFileDraft((prev) => prev ? {
+        ...prev,
+        status: "error",
+        detail: "请先生成一个文件操作草案。",
+        at: Date.now(),
+      } : prev);
+      return;
+    }
+    if (!state.online) {
+      setWorkspaceFileDraft((prev) => prev ? {
+        ...prev,
+        status: "error",
+        detail: "Gateway 离线，无法提交 write_file 审批。",
+        at: Date.now(),
+      } : prev);
+      return;
+    }
+    const request: JsonRecord = {
+      path: workspaceFileDraft.path,
+      mode: "replace",
+      access_profile: "workspace",
+      content: workspaceFileDraft.content,
+    };
+    setWorkspaceFileDraft((prev) => prev ? {
+      ...prev,
+      status: "running",
+      detail: "正在提交 write_file 审批草案；请求不包含 execute=true。",
+      at: Date.now(),
+      request,
+      result: null,
+    } : prev);
+    try {
+      const result = await bridgeAction("write_file", request);
+      const status = asString(result.status, "approval_required");
+      const approvalId = asString(result.approval_id);
+      const detail = approvalId
+        ? `write_file 审批已排队：${compactApprovalId(approvalId)} · ${workspaceFileDraft.path}`
+        : asString(result.message, status);
+      setWorkspaceFileDraft((prev) => prev ? {
+        ...prev,
+        status,
+        detail,
+        at: Date.now(),
+        request,
+        result,
+      } : prev);
+      appendRuntimeLog({
+        channel: "approvals",
+        title: "Workspace 文件审批",
+        detail,
+        status,
+      });
+      appendAgentThreadEvent({
+        kind: "write",
+        title: "Workspace 文件审批",
+        detail,
+        status,
+        approvalId,
+        approvalDelta: approvalId ? 1 : 0,
+        contextAttachments: approvalId ? [createAgentThreadContextAttachment({
+          kind: "approval",
+          title: `审批 ${compactApprovalId(approvalId)}`,
+          detail: `write_file · ${workspaceFileDraft.path} · Workspace Explorer 文件操作草案`,
+          ref: approvalId,
+          source: "Workspace Explorer",
+          status,
+        })] : [],
+      });
+      setBottomPanelTab("approvals");
+      void refresh();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Workspace 文件审批提交失败";
+      setWorkspaceFileDraft((prev) => prev ? {
+        ...prev,
+        status: "error",
+        detail,
+        at: Date.now(),
+        request,
+        result: null,
+      } : prev);
+      appendRuntimeLog({
+        channel: "approvals",
+        title: "Workspace 文件审批失败",
+        detail,
+        status: "error",
+      });
+    }
   };
 
   const appendAgentThreadContextAttachments = (attachments: AgentThreadContextAttachment[], messageTitle = "挂载上下文") => {
@@ -4956,6 +6804,200 @@ export function AgentControlCenter({
     appendAgentThreadContextAttachments(attachments, "挂载草案上下文");
   };
 
+  const runWorkspaceContextPack = async () => {
+    if (!selectedWorkspaceManagerRow) return;
+    const task = `工作区「${selectedWorkspaceManagerRow.title}」上下文预检：梳理项目边界、最近文件、线程空间、记忆与 Skills，供当前 Agent 线程使用。`;
+    const workspaceSkillSet = workspaceSkillSets[selectedWorkspaceManagerRow.book.id] || defaultWorkspaceSkillSet(selectedWorkspaceManagerRow.book.id);
+    const workspaceEnabledSkillKeys = workspaceSkillSet.enabledSkillKeys;
+    const request = buildWorkspaceContextPackPayload(selectedWorkspaceManagerRow, task);
+    const threadContextItems = asRecordList(request.thread_context);
+    setWorkspaceContextPack({
+      id: `workspace-context-pack-${selectedWorkspaceManagerRow.book.id}-${Date.now()}-running`,
+      workspaceId: selectedWorkspaceManagerRow.book.id,
+      workspaceTitle: selectedWorkspaceManagerRow.title,
+      task,
+      status: "running",
+      detail: "正在构建工作区级 context_pack；只读组合工作区摘要、最近文件、线程附件、记忆和 Skills。",
+      at: Date.now(),
+      request,
+      result: null,
+      contextItems: [],
+      threadContextItems,
+      activeSkillKeys: workspaceEnabledSkillKeys,
+      excludedToolScopes: [],
+    });
+    appendRuntimeLog({
+      channel: "terminal",
+      title: "工作区 context_pack",
+      detail: `${selectedWorkspaceManagerRow.title} · ${threadContextItems.length} 条工作区线程上下文`,
+      status: "running",
+    });
+    if (!state.online) {
+      const localContextItems = mergeDraftContextItems(threadContextItems, [
+        ...memoryRecentL2.slice(0, 3),
+        ...memoryRecentL1.slice(0, 2),
+      ].map(asRecord));
+      const snapshot: WorkspaceContextPackSnapshot = {
+        id: `workspace-context-pack-${selectedWorkspaceManagerRow.book.id}-${Date.now()}-${uid()}`,
+        workspaceId: selectedWorkspaceManagerRow.book.id,
+        workspaceTitle: selectedWorkspaceManagerRow.title,
+        task,
+        status: "draft",
+        detail: `Gateway 离线，已生成本地只读工作区上下文包：${localContextItems.length} 条上下文。`,
+        at: Date.now(),
+        request,
+        result: null,
+        contextItems: localContextItems,
+        threadContextItems,
+        activeSkillKeys: workspaceEnabledSkillKeys,
+        excludedToolScopes: gatedTools.map((tool) => tool.action).slice(0, 8),
+      };
+      setWorkspaceContextPack(snapshot);
+      recordWorkspaceContextPackHistory(snapshot);
+      appendRuntimeLog({
+        channel: "terminal",
+        title: "工作区 context_pack 本地草案",
+        detail: selectedWorkspaceManagerRow.title,
+        status: "draft",
+      });
+      return;
+    }
+    try {
+      const result = await bridgeAction("context_pack", request);
+      const pack = asRecord(result.context_pack);
+      const returnedThreadContext = asRecordList(pack.thread_context);
+      const effectiveThreadContext = returnedThreadContext.length ? returnedThreadContext : threadContextItems;
+      const gatewayContextItems = asRecordList(pack.context_pack);
+      const contextItems = mergeDraftContextItems(effectiveThreadContext, gatewayContextItems);
+      const activeSkillKeys = Array.from(new Set([
+        ...workspaceEnabledSkillKeys,
+        ...asArray(pack.active_skill_keys).map((item) => String(item)).filter(Boolean),
+      ]));
+      const policy = asRecord(pack.tool_policy);
+      const excludedToolScopes = asArray(policy.excluded_tool_scopes).map((item) => String(item)).filter(Boolean);
+      const snapshot: WorkspaceContextPackSnapshot = {
+        id: `workspace-context-pack-${selectedWorkspaceManagerRow.book.id}-${Date.now()}-${uid()}`,
+        workspaceId: selectedWorkspaceManagerRow.book.id,
+        workspaceTitle: selectedWorkspaceManagerRow.title,
+        task,
+        status: "ready",
+        detail: `${contextItems.length} 条上下文 · ${activeSkillKeys.length} 个 Skills · ${excludedToolScopes.length} 个工具排除项`,
+        at: Date.now(),
+        request,
+        result,
+        contextItems,
+        threadContextItems: effectiveThreadContext,
+        activeSkillKeys,
+        excludedToolScopes,
+      };
+      setWorkspaceContextPack(snapshot);
+      recordWorkspaceContextPackHistory(snapshot);
+      appendRuntimeLog({
+        channel: "terminal",
+        title: "工作区 context_pack 就绪",
+        detail: `${selectedWorkspaceManagerRow.title} · ${contextItems.length} 条上下文 / ${activeSkillKeys.length} 个 Skills`,
+        status: "ready",
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "工作区 context_pack 请求失败";
+      const localContextItems = mergeDraftContextItems(threadContextItems, [
+        ...memoryRecentL2.slice(0, 3),
+        ...memoryRecentL1.slice(0, 2),
+      ].map(asRecord));
+      const snapshot: WorkspaceContextPackSnapshot = {
+        id: `workspace-context-pack-${selectedWorkspaceManagerRow.book.id}-${Date.now()}-${uid()}`,
+        workspaceId: selectedWorkspaceManagerRow.book.id,
+        workspaceTitle: selectedWorkspaceManagerRow.title,
+        task,
+        status: "draft",
+        detail: `Gateway context_pack 失败，已降级为本地只读草案：${detail}`,
+        at: Date.now(),
+        request,
+        result: null,
+        contextItems: localContextItems,
+        threadContextItems,
+        activeSkillKeys: workspaceEnabledSkillKeys,
+        excludedToolScopes: gatedTools.map((tool) => tool.action).slice(0, 8),
+      };
+      setWorkspaceContextPack(snapshot);
+      recordWorkspaceContextPackHistory(snapshot);
+      appendRuntimeLog({
+        channel: "terminal",
+        title: "工作区 context_pack 降级",
+        detail,
+        status: "draft",
+      });
+    }
+  };
+
+  const attachWorkspaceContextPackSnapshotToThread = (snapshot: WorkspaceContextPackSnapshot) => {
+    if (!activeThread || !snapshot.contextItems.length) return;
+    const attachments = snapshot.contextItems.slice(0, 8).map((item, index) => createAgentThreadContextAttachment({
+      kind: "context_pack",
+      title: asString(item.title, asString(item.dimension, `工作区上下文 ${index + 1}`)),
+      detail: asString(item.summary, asString(item.content, "工作区上下文切片")),
+      ref: asString(item.ref, asString(item.id, `${snapshot.workspaceId}-${index}`)),
+      source: snapshot.workspaceTitle || "Multi Workspace Manager",
+      status: snapshot.status || "draft",
+    }));
+    appendAgentThreadContextAttachments(attachments, "挂载工作区 context_pack");
+  };
+
+  const attachWorkspaceContextPackToThread = () => {
+    attachWorkspaceContextPackSnapshotToThread(workspaceContextPack);
+  };
+
+  const attachWorkspacePermissionProfileToThread = () => {
+    if (!selectedWorkspaceManagerRow || !selectedWorkspacePermissionProfile) return;
+    appendAgentThreadContextAttachments([createAgentThreadContextAttachment({
+      kind: "workspace",
+      title: "工作区权限 profile",
+      detail: [
+        `读文件 ${WORKSPACE_PERMISSION_LEVEL_LABELS[selectedWorkspacePermissionProfile.readFiles]}`,
+        `写文件 ${WORKSPACE_PERMISSION_LEVEL_LABELS[selectedWorkspacePermissionProfile.writeFiles]}`,
+        `终端 ${WORKSPACE_PERMISSION_LEVEL_LABELS[selectedWorkspacePermissionProfile.runCommands]}`,
+        `远程模型 ${WORKSPACE_PERMISSION_LEVEL_LABELS[selectedWorkspacePermissionProfile.remoteModels]}`,
+        `MCP ${WORKSPACE_PERMISSION_LEVEL_LABELS[selectedWorkspacePermissionProfile.mcpCalls]}`,
+        `Skill runtime ${WORKSPACE_PERMISSION_LEVEL_LABELS[selectedWorkspacePermissionProfile.skillRuntime]}`,
+      ].join(" · "),
+      ref: selectedWorkspaceManagerRow.book.id,
+      source: selectedWorkspaceManagerRow.title,
+      status: "policy",
+    })], "挂载工作区权限 profile");
+  };
+
+  const attachWorkspaceSkillSetToThread = () => {
+    if (!selectedWorkspaceManagerRow || !selectedWorkspaceSkillSet) return;
+    const enabledRows = selectedWorkspaceSkillSet.enabledSkillKeys
+      .map((key) => skillLibraryRows.find((row) => row.key === key) || null)
+      .filter((row): row is SkillLibraryRow => Boolean(row));
+    const disabledRows = selectedWorkspaceSkillSet.disabledSkillKeys
+      .map((key) => skillLibraryRows.find((row) => row.key === key) || null)
+      .filter((row): row is SkillLibraryRow => Boolean(row));
+    const summary = createAgentThreadContextAttachment({
+      kind: "skill",
+      title: "工作区 Skills 集",
+      detail: [
+        `启用 ${enabledRows.length ? enabledRows.map((row) => row.label).join(" / ") : "未指定"}`,
+        `禁用 ${disabledRows.length ? disabledRows.map((row) => row.label).join(" / ") : "未指定"}`,
+        selectedWorkspaceSkillSet.notes,
+        "仅作为 thread_context；不运行 Skill runtime。",
+      ].filter(Boolean).join(" · "),
+      ref: selectedWorkspaceManagerRow.book.id,
+      source: selectedWorkspaceManagerRow.title,
+      status: selectedWorkspaceSkillSet.updatedAt ? "policy" : "default",
+    });
+    const enabledAttachments = enabledRows.slice(0, 8).map((row) => createAgentThreadContextAttachment({
+      kind: "skill",
+      title: row.label,
+      detail: `${row.scope} · ${row.source} · 工作区默认启用；${row.description || "SKILL.md instruction context"}`,
+      ref: row.key,
+      source: row.rootLabel || "Workspace Skills Set",
+      status: "enabled",
+    }));
+    appendAgentThreadContextAttachments([summary, ...enabledAttachments], "挂载工作区 Skills 集");
+  };
+
   const attachActiveSkillsToThread = () => {
     const skillKeys = commandDraft.activeSkillKeys.length
       ? commandDraft.activeSkillKeys
@@ -4972,6 +7014,112 @@ export function AgentControlCenter({
       status: commandDraft.activeSkillKeys.includes(key) ? "active" : "candidate",
     }));
     appendAgentThreadContextAttachments(attachments, "挂载 Skills");
+  };
+
+  const attachSelectedSkillToThread = () => {
+    if (!selectedSkillRow) return;
+    appendAgentThreadContextAttachments([createAgentThreadContextAttachment({
+      kind: "skill",
+      title: selectedSkillRow.label,
+      detail: `${selectedSkillRow.scope} · ${selectedSkillRow.source} · ${selectedSkillRow.description || "SKILL.md instruction context"}`,
+      ref: selectedSkillRow.key,
+      source: selectedSkillRow.rootLabel || "Skills",
+      status: selectedSkillRow.status,
+    })], "挂载选中 Skill");
+    appendRuntimeLog({
+      channel: "output",
+      title: "Skill 已挂入线程",
+      detail: `${selectedSkillRow.label} · ${selectedSkillRow.scope}；仅作为 thread_context，不执行脚本。`,
+      status: "attached",
+    });
+  };
+
+  const runSkillRoutePreview = async () => {
+    const task = skillRouteTask.trim() || commandTask.trim() || "继续灵枢 LumenOS 开发";
+    const domain = skillScopeFilter === "all" ? "general" : skillScopeFilter;
+    const request: JsonRecord = {
+      task,
+      domain,
+      local_limit: 12,
+    };
+    setSkillRoutePreview({
+      task,
+      domain,
+      status: "running",
+      detail: "正在请求 Gateway skill_route；只读匹配 Skills，不运行脚本。",
+      at: Date.now(),
+      request,
+      result: null,
+    });
+    appendRuntimeLog({
+      channel: "output",
+      title: "Skills 路由预览",
+      detail: `${domain} · ${task}`,
+      status: "running",
+    });
+    try {
+      const result = await bridgeAction("skill_route", request);
+      const route = asRecord(result.skill_route);
+      const schema = asRecord(route.schema);
+      const core = asRecordList(route.active_core_skills).length;
+      const local = asRecordList(route.active_local_skills).length;
+      const isolated = asRecordList(route.isolated_skills).length;
+      const detail = `${core} 个核心 Skills · ${local} 个本地 Skills · ${isolated} 个隔离 Skills；${asString(schema.execution, "route-only")}`;
+      setSkillRoutePreview({
+        task,
+        domain,
+        status: asString(result.status, "ok"),
+        detail,
+        at: Date.now(),
+        request,
+        result,
+      });
+      setQuickAction({ label: "Skills 路由预览", status: asString(result.status, "ok"), detail });
+      appendRuntimeLog({
+        channel: "output",
+        title: "Skills 路由预览完成",
+        detail,
+        status: asString(result.status, "ok"),
+      });
+      appendAgentThreadEvent({
+        kind: "system",
+        title: "Skills 路由预览",
+        detail,
+        status: asString(result.status, "ok"),
+        contextAttachments: [
+          ...asRecordList(route.active_core_skills).slice(0, 4),
+          ...asRecordList(route.active_local_skills).slice(0, 6),
+        ].map((item) => {
+          const row = skillRowFromRecord(item, "active");
+          return createAgentThreadContextAttachment({
+            kind: "skill",
+            title: row.label,
+            detail: `${row.scope} · ${row.source} · ${row.description}`,
+            ref: row.key,
+            source: row.rootLabel || "skill_route",
+            status: row.status,
+          });
+        }),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Skills 路由失败";
+      setSkillRoutePreview({
+        task,
+        domain,
+        status: "error",
+        detail,
+        at: Date.now(),
+        request,
+        result: null,
+      });
+      setQuickAction({ label: "Skills 路由预览", status: "error", detail });
+      appendRuntimeLog({
+        channel: "output",
+        title: "Skills 路由预览失败",
+        detail,
+        status: "error",
+      });
+    }
   };
 
   const agentThreadRows = visibleAgentThreads.map((thread) => ({
@@ -5637,7 +7785,7 @@ export function AgentControlCenter({
                   </div>
                   <div className="grid gap-2 rounded border border-slate-800 bg-slate-950 px-2 py-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
                     <div className="min-w-0 text-[10px] leading-relaxed text-slate-500">
-                      执行门：{selectedApprovalAction === "write_file" ? "write_file 可请求执行" : "非 write_file 只允许拒绝或继续复核"} · {selectedApprovalIsTerminal ? "已终态" : state.online ? "Gateway 在线" : "Gateway 离线"}
+                      执行门：{selectedApprovalExecutableLabel ? `${selectedApprovalExecutableLabel} 可请求执行` : "该动作只允许拒绝或继续复核"} · {selectedApprovalIsTerminal ? "已终态" : state.online ? "Gateway 在线" : "Gateway 离线"}
                     </div>
                     <ActionButton
                       label={approvalDecision.status === "running" && approvalDecision.decision === "reject" ? "拒绝中" : "拒绝审批"}
@@ -5646,7 +7794,7 @@ export function AgentControlCenter({
                       disabled={!selectedApprovalCanReject}
                     />
                     <ActionButton
-                      label={approvalDecision.status === "running" && approvalDecision.decision === "execute" ? "执行中" : "执行 write_file"}
+                      label={approvalDecision.status === "running" && approvalDecision.decision === "execute" ? "执行中" : `执行 ${selectedApprovalExecutableLabel || "审批"}`}
                       icon={<CheckCircle2 className="h-3.5 w-3.5" />}
                       onClick={() => void decideSelectedApproval("execute")}
                       disabled={!selectedApprovalCanExecuteWrite}
@@ -5692,7 +7840,7 @@ export function AgentControlCenter({
                     <EmptyBlock text={`${approvalDetailTab} 暂无结构化数据；可切到 Request 或 Result 查看原始记录。`} />
                   )}
                   <div className="rounded border border-amber-500/20 bg-amber-500/5 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
-                    复核台只执行两类决策：拒绝审批，或在 Gateway 执行门开启时执行已排队的 write_file。
+                    复核台只执行受控决策：拒绝审批、在 Gateway 执行门开启时执行已排队的 write_file、Memory 管理审批或 Provider probe；Provider probe 仍只探测模型列表端点，远程端点必须显式 allow_remote_model。
                   </div>
                 </div>
               ) : <EmptyBlock text="选择一条审批记录后查看详情" />}
@@ -6316,55 +8464,476 @@ export function AgentControlCenter({
       {renderSystemMetrics()}
       {renderWorkbenchHeader({
         icon: <Library className="h-4 w-4" />,
-        eyebrow: "工作区管理器",
-        title: "多工作区控制",
-        description: "每个工作区都应拥有独立上下文、领域 Agent、记忆切片、工具权限和产物边界。这里先把历史项目挂载成 LumenOS 工作区。",
-        status: `${allWorkspaceSummaries.length} 个工作区`,
-        actions: <ActionButton label="新建工作区" icon={<Plus className="h-3.5 w-3.5" />} onClick={onCreateBook} />,
+        eyebrow: "Workspace Workbench",
+        title: "多工作区管理器",
+        description: "用 VS Code 式 Workbench 管理项目边界、Agent 线程空间、最近文件、上下文附件和审批入口。织梦只是其中一个工作区，不再是产品外壳。",
+        status: `${workspaceManagerRows.length}/${allWorkspaceSummaries.length} 个工作区`,
+        actions: (
+          <>
+            <ActionButton label="新建工作区" icon={<Plus className="h-3.5 w-3.5" />} onClick={onCreateBook} />
+            <ActionButton label="打开线程空间" icon={<MessageSquare className="h-3.5 w-3.5" />} onClick={() => setActiveView("agent")} />
+          </>
+        ),
       })}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-4 2xl:grid-cols-[minmax(360px,0.85fr)_minmax(0,1.15fr)_340px]">
         <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<FolderKanban className="h-4 w-4 text-blue-300" />} title="工作区资源管理器" meta={`${allWorkspaceSummaries.length} 已挂载`} />
-          <div className="grid gap-2 md:grid-cols-2">
-            {allWorkspaceSummaries.map((item) => (
+          <SectionTitle icon={<FolderKanban className="h-4 w-4 text-blue-300" />} title="工作区列表" meta={`${workspaceManagerRows.length} 可见`} />
+          <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_150px]">
+            <label className="relative block min-w-0">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-600" />
+              <input
+                value={workspaceManagerSearch}
+                onChange={(event) => setWorkspaceManagerSearch(event.target.value)}
+                className="h-9 w-full rounded-lg border border-slate-800 bg-slate-950 pl-9 pr-3 text-xs text-slate-100 outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-500/50"
+                placeholder="搜索工作区、文件、线程、虚拟路径"
+              />
+            </label>
+            <select
+              value={workspaceDomainFilter}
+              onChange={(event) => setWorkspaceDomainFilter(event.target.value)}
+              className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-2 text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+            >
+              {workspaceDomainOptions.map((domain) => (
+                <option key={domain} value={domain}>{domain === "all" ? "全部领域" : domain}</option>
+              ))}
+            </select>
+          </div>
+          <div className="mt-3 space-y-2">
+            {workspaceManagerRows.map((item) => (
               <button
                 key={item.book.id}
+                type="button"
                 onClick={() => onOpenBook(item.book.id)}
-                className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                className={`w-full rounded-lg border px-3 py-3 text-left transition-colors ${
                   item.book.id === activeWorkspace?.book.id
-                    ? "border-cyan-500/30 bg-cyan-500/10"
-                    : "border-slate-800 bg-slate-950/40 hover:bg-slate-800/70"
+                    ? "border-cyan-500/40 bg-cyan-500/10"
+                    : "border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-800/70"
                 }`}
               >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-cyan-200">{item.icon}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-white">{item.title}</div>
+                <div className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-start gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded bg-slate-900 text-cyan-200">{item.icon}</div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-white">{item.title}</span>
+                      {item.book.id === activeWorkspace?.book.id && <StatusBadge status="当前" subtle />}
+                    </div>
                     <div className="mt-1 truncate text-[10px] text-cyan-200">{item.domain}</div>
-                    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-500">{item.description}</p>
+                    <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500">{item.description}</p>
+                    {item.latestFile && (
+                      <div className="mt-2 truncate font-mono text-[10px] text-slate-600" title={item.latestFilePath}>
+                        最近文件: {truncateMiddle(item.latestFilePath, 36)}
+                      </div>
+                    )}
                   </div>
+                  <div className="text-right text-[10px] text-slate-500">{formatDateTime(item.updatedAt)}</div>
                 </div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="mt-3 grid grid-cols-4 gap-2">
                   <MiniStat label="文件" value={`${item.files}`} />
-                  <MiniStat label="字数" value={formatNumber(item.words)} />
-                  <MiniStat label="分组" value={`${item.categoryCount}`} />
+                  <MiniStat label="线程" value={`${item.activeThreadCount}`} tone={item.activeThreadCount ? "text-cyan-300" : "text-slate-400"} />
+                  <MiniStat label="上下文" value={`${item.contextAttachmentCount}`} />
+                  <MiniStat label="审批" value={`${item.approvalCount}`} tone={item.approvalCount ? "text-amber-300" : "text-slate-400"} />
                 </div>
               </button>
             ))}
-            {!allWorkspaceSummaries.length && <EmptyBlock text="还没有工作区" />}
+            {!workspaceManagerRows.length && <EmptyBlock text="当前筛选下没有工作区" />}
           </div>
         </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<Database className="h-4 w-4 text-pink-300" />} title="工作区上下文" meta={activeWorkspace?.domain} />
-          {activeWorkspace ? (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
-                <div className="truncate text-sm font-semibold text-white">{activeWorkspace.title}</div>
-                <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-slate-400">{activeWorkspace.description}</p>
+
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<Database className="h-4 w-4 text-pink-300" />} title="工作区检查器" meta={selectedWorkspaceManagerRow?.domain || "未选择"} />
+            {selectedWorkspaceManagerRow ? (
+              <div className="mt-3 space-y-3">
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-8 w-8 items-center justify-center rounded bg-slate-950 text-cyan-100">{selectedWorkspaceManagerRow.icon}</span>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-white">{selectedWorkspaceManagerRow.title}</div>
+                          <div className="mt-0.5 truncate text-[10px] text-cyan-200">{selectedWorkspaceManagerRow.domain}</div>
+                        </div>
+                      </div>
+                      <p className="mt-3 line-clamp-3 text-xs leading-relaxed text-slate-400">{selectedWorkspaceManagerRow.description}</p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                      <ActionButton label="打开工作区" icon={<ArrowUpRight className="h-3.5 w-3.5" />} onClick={() => onOpenBook(selectedWorkspaceManagerRow.book.id)} />
+                      <ActionButton
+                        label="绑定当前线程"
+                        icon={<LinkIcon className="h-3.5 w-3.5" />}
+                        onClick={() => activeThread && bindAgentThreadToActiveWorkspace(activeThread.id)}
+                        disabled={!activeThread || selectedWorkspaceManagerRow.book.id !== activeWorkspace?.book.id || activeThread.workspaceId === selectedWorkspaceManagerRow.book.id}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                  <MiniStat label="文件" value={`${selectedWorkspaceManagerRow.files}`} />
+                  <MiniStat label="字数" value={formatNumber(selectedWorkspaceManagerRow.words)} />
+                  <MiniStat label="分组" value={`${selectedWorkspaceManagerRow.categoryCount}`} />
+                  <MiniStat label="线程" value={`${selectedWorkspaceManagerRow.activeThreadCount}`} tone={selectedWorkspaceManagerRow.activeThreadCount ? "text-cyan-300" : "text-slate-400"} />
+                  <MiniStat label="上下文" value={`${selectedWorkspaceManagerRow.contextAttachmentCount}`} />
+                  <MiniStat label="最近打开" value={`${selectedWorkspaceManagerRow.recentCount}`} />
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <SectionTitle icon={<Brain className="h-4 w-4 text-pink-300" />} title="工作区 context_pack" meta={workspaceContextPack.workspaceId === selectedWorkspaceManagerRow.book.id ? statusLabel(workspaceContextPack.status || "draft") : "未生成"} />
+                    <div className="flex flex-wrap gap-2">
+                      <ActionButton label="生成预检" icon={<ListChecks className="h-3.5 w-3.5" />} onClick={() => void runWorkspaceContextPack()} disabled={workspaceContextPack.status === "running"} />
+                      <ActionButton label="挂入线程" icon={<Layers className="h-3.5 w-3.5" />} onClick={attachWorkspaceContextPackToThread} disabled={!activeThread || workspaceContextPack.workspaceId !== selectedWorkspaceManagerRow.book.id || !workspaceContextPack.contextItems.length} />
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                    把当前工作区、最近文件、线程空间和已有 thread_context 压成只读上下文包；只用于预检和线程附件，不写文件、不运行 Skill、不访问远程模型。
+                  </p>
+                  {workspaceContextPack.workspaceId === selectedWorkspaceManagerRow.book.id ? (
+                    <div className="mt-3 space-y-3">
+                      <div className="grid gap-2 sm:grid-cols-4">
+                        <MiniStat label="上下文" value={`${workspaceContextPack.contextItems.length}`} tone={workspaceContextPack.contextItems.length ? "text-cyan-300" : "text-slate-400"} />
+                        <MiniStat label="线程上下文" value={`${workspaceContextPack.threadContextItems.length}`} />
+                        <MiniStat label="Skills" value={`${workspaceContextPack.activeSkillKeys.length}`} tone={workspaceContextPack.activeSkillKeys.length ? "text-emerald-300" : "text-slate-400"} />
+                        <MiniStat label="工具排除" value={`${workspaceContextPack.excludedToolScopes.length}`} tone={workspaceContextPack.excludedToolScopes.length ? "text-amber-300" : "text-slate-400"} />
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
+                        {workspaceContextPack.detail || "等待生成工作区上下文包。"}
+                      </div>
+                      <div className="grid max-h-36 gap-1 overflow-auto pr-1">
+                        {workspaceContextPack.contextItems.slice(0, 6).map((item, index) => (
+                          <div key={`${asString(item.ref, asString(item.id, String(index)))}-${index}`} className="rounded border border-slate-800 bg-slate-900/60 px-2 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-[11px] font-medium text-slate-200">{asString(item.title, asString(item.dimension, `上下文 ${index + 1}`))}</span>
+                              <span className="shrink-0 text-[10px] text-slate-600">{asString(item.dimension, asString(item.kind, "context"))}</span>
+                            </div>
+                            <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{asString(item.summary, asString(item.content, "暂无摘要"))}</div>
+                          </div>
+                        ))}
+                        {!workspaceContextPack.contextItems.length && <EmptyBlock text="生成预检后显示上下文切片" />}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] text-slate-500">
+                      当前工作区还没有生成 context_pack 预检。
+                    </div>
+                  )}
+                  <div className="mt-3 rounded border border-slate-800 bg-slate-950/50 px-2 py-2">
+                    <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                      <span className="truncate text-[10px] font-semibold text-slate-300">context_pack 历史版本</span>
+                      <span className="shrink-0 text-[10px] text-slate-600">{selectedWorkspaceContextPackHistory.length}</span>
+                    </div>
+                    <div className="grid max-h-32 gap-1 overflow-auto pr-1">
+                      {selectedWorkspaceContextPackHistory.map((snapshot) => (
+                        <div key={snapshot.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-2">
+                          <button
+                            type="button"
+                            onClick={() => restoreWorkspaceContextPackSnapshot(snapshot)}
+                            className="min-w-0 text-left"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-[11px] font-medium text-slate-200">{formatDateTime(snapshot.at)}</span>
+                              <StatusBadge status={snapshot.status} subtle />
+                            </div>
+                            <div className="mt-1 truncate text-[10px] text-slate-500">{snapshot.contextItems.length} 上下文 · {snapshot.activeSkillKeys.length} Skills · {snapshot.excludedToolScopes.length} 工具排除</div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              restoreWorkspaceContextPackSnapshot(snapshot);
+                              attachWorkspaceContextPackSnapshotToThread(snapshot);
+                            }}
+                            disabled={!activeThread}
+                            className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            挂载
+                          </button>
+                        </div>
+                      ))}
+                      {!selectedWorkspaceContextPackHistory.length && <EmptyBlock text="生成预检后会保存最近历史版本" />}
+                    </div>
+                  </div>
+                </div>
+                {selectedWorkspacePermissionProfile && (
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="工作区权限 profile" meta={selectedWorkspacePermissionProfile.updatedAt ? formatDateTime(selectedWorkspacePermissionProfile.updatedAt) : "默认策略"} />
+                      <div className="flex flex-wrap gap-2">
+                        <ActionButton label="挂入线程" icon={<Layers className="h-3.5 w-3.5" />} onClick={attachWorkspacePermissionProfileToThread} disabled={!activeThread} />
+                        <ActionButton label="恢复默认" icon={<RefreshCw className="h-3.5 w-3.5" />} onClick={() => resetWorkspacePermissionProfile(selectedWorkspaceManagerRow.book.id)} disabled={!workspacePermissionProfiles[selectedWorkspaceManagerRow.book.id]} />
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                      这是当前工作区的策略声明，会进入工作区 context_pack 和 thread_context；真实执行仍由 Gateway execute flag、请求级 execute=true 和审批队列共同决定。
+                    </p>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      {([
+                        ["readFiles", "读文件", "继承 Gateway read_file / read-only 策略"],
+                        ["writeFiles", "写文件", "默认进入 write_file approval queue"],
+                        ["runCommands", "终端命令", "仅 allowlist + Gateway --execute-command"],
+                        ["remoteModels", "远程模型", "需要 allow_remote_model 和 Provider gate"],
+                        ["mcpCalls", "MCP 调用", "仅 HTTP/注册 stdio，仍需 --execute-mcp"],
+                        ["skillRuntime", "Skill runtime", "运行脚本仍需 --execute-skill"],
+                        ["scheduler", "Scheduler", "安装/卸载仍需独立审批"],
+                      ] as Array<[keyof Omit<WorkspacePermissionProfile, "workspaceId" | "updatedAt" | "notes">, string, string]>).map(([key, label, detail]) => (
+                        <label key={key} className="grid grid-cols-[minmax(0,1fr)_120px] items-center gap-2 rounded border border-slate-800 bg-slate-950 px-2 py-2">
+                          <span className="min-w-0">
+                            <span className="block truncate text-[11px] font-medium text-slate-200">{label}</span>
+                            <span className="block truncate text-[10px] text-slate-600">{detail}</span>
+                          </span>
+                          <select
+                            value={selectedWorkspacePermissionProfile[key]}
+                            onChange={(event) => updateWorkspacePermissionProfile(selectedWorkspaceManagerRow.book.id, { [key]: event.target.value as WorkspacePermissionLevel })}
+                            className="h-7 rounded border border-slate-800 bg-slate-900 px-2 text-[10px] text-slate-200 outline-none focus:border-cyan-500/50"
+                          >
+                            {WORKSPACE_PERMISSION_LEVELS.map((level) => (
+                              <option key={level} value={level}>{WORKSPACE_PERMISSION_LEVEL_LABELS[level]}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                    <textarea
+                      value={selectedWorkspacePermissionProfile.notes}
+                      onChange={(event) => updateWorkspacePermissionProfile(selectedWorkspaceManagerRow.book.id, { notes: event.target.value })}
+                      className="mt-3 min-h-16 w-full resize-y rounded border border-slate-800 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-500/50"
+                      placeholder="补充该工作区的权限边界、禁用原因或审批要求"
+                    />
+                  </div>
+                )}
+                {selectedWorkspaceSkillSet && (
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <SectionTitle icon={<Sparkles className="h-4 w-4 text-fuchsia-300" />} title="工作区 Skills 集" meta={selectedWorkspaceSkillSet.updatedAt ? formatDateTime(selectedWorkspaceSkillSet.updatedAt) : "默认上下文"} />
+                      <div className="flex flex-wrap gap-2">
+                        <ActionButton
+                          label="启用选中 Skill"
+                          icon={<CopyPlus className="h-3.5 w-3.5" />}
+                          onClick={() => selectedSkillRow && addWorkspaceSkillKey(selectedWorkspaceManagerRow.book.id, selectedSkillRow.key, "enabled")}
+                          disabled={!selectedSkillRow || selectedWorkspaceSkillSet.enabledSkillKeys.includes(selectedSkillRow.key)}
+                        />
+                        <ActionButton
+                          label="禁用选中 Skill"
+                          icon={<XCircle className="h-3.5 w-3.5" />}
+                          onClick={() => selectedSkillRow && addWorkspaceSkillKey(selectedWorkspaceManagerRow.book.id, selectedSkillRow.key, "disabled")}
+                          disabled={!selectedSkillRow || selectedWorkspaceSkillSet.disabledSkillKeys.includes(selectedSkillRow.key)}
+                        />
+                        <ActionButton label="挂入线程" icon={<Layers className="h-3.5 w-3.5" />} onClick={attachWorkspaceSkillSetToThread} disabled={!activeThread} />
+                        <ActionButton label="恢复默认" icon={<RefreshCw className="h-3.5 w-3.5" />} onClick={() => resetWorkspaceSkillSet(selectedWorkspaceManagerRow.book.id)} disabled={!workspaceSkillSets[selectedWorkspaceManagerRow.book.id]} />
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                      这是当前工作区的默认 Skills 策略，会进入工作区 context_pack 和 thread_context；这里只声明启用/禁用倾向，不执行脚本，不打开 Skill runtime。
+                    </p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                      <MiniStat label="启用" value={`${workspaceEnabledSkillRows.length}/${selectedWorkspaceSkillSet.enabledSkillKeys.length}`} tone={selectedWorkspaceSkillSet.enabledSkillKeys.length ? "text-emerald-300" : "text-slate-400"} />
+                      <MiniStat label="禁用" value={`${workspaceDisabledSkillRows.length}/${selectedWorkspaceSkillSet.disabledSkillKeys.length}`} tone={selectedWorkspaceSkillSet.disabledSkillKeys.length ? "text-amber-300" : "text-slate-400"} />
+                      <MiniStat label="候选" value={`${workspaceSkillCandidates.length}`} />
+                      <MiniStat label="选中" value={selectedSkillRow ? selectedSkillRow.label : "无"} tone={selectedSkillRow ? "text-cyan-300" : "text-slate-400"} />
+                    </div>
+                    <textarea
+                      value={selectedWorkspaceSkillSet.notes}
+                      onChange={(event) => updateWorkspaceSkillSet(selectedWorkspaceManagerRow.book.id, { notes: event.target.value })}
+                      className="mt-3 min-h-16 w-full resize-y rounded border border-slate-800 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-200 outline-none transition-colors placeholder:text-slate-600 focus:border-cyan-500/50"
+                      placeholder="补充该工作区默认启用/禁用 Skills 的原因、适用边界或风险说明"
+                    />
+                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                      <div className="rounded border border-slate-800 bg-slate-950/50 px-2 py-2">
+                        <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                          <span className="truncate text-[10px] font-semibold text-emerald-200">启用 Skills</span>
+                          <span className="shrink-0 text-[10px] text-slate-600">{selectedWorkspaceSkillSet.enabledSkillKeys.length}</span>
+                        </div>
+                        <div className="grid max-h-32 gap-1 overflow-auto pr-1">
+                          {selectedWorkspaceSkillSet.enabledSkillKeys.map((key) => {
+                            const row = skillLibraryRows.find((item) => item.key === key);
+                            return (
+                              <div key={`enabled-${key}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedSkillKey(key)}
+                                  className="min-w-0 text-left"
+                                >
+                                  <div className="truncate text-[11px] font-medium text-slate-200">{row?.label || key}</div>
+                                  <div className="mt-1 truncate text-[10px] text-slate-500">{row ? `${row.scope} · ${row.source}` : "未在当前 Skill 库解析到，仍保留 key"}</div>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeWorkspaceSkillKey(selectedWorkspaceManagerRow.book.id, key)}
+                                  className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-red-500/40 hover:text-red-200"
+                                >
+                                  移除
+                                </button>
+                              </div>
+                            );
+                          })}
+                          {!selectedWorkspaceSkillSet.enabledSkillKeys.length && <EmptyBlock text="还没有启用的工作区 Skill" />}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-800 bg-slate-950/50 px-2 py-2">
+                        <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                          <span className="truncate text-[10px] font-semibold text-amber-200">禁用 Skills</span>
+                          <span className="shrink-0 text-[10px] text-slate-600">{selectedWorkspaceSkillSet.disabledSkillKeys.length}</span>
+                        </div>
+                        <div className="grid max-h-32 gap-1 overflow-auto pr-1">
+                          {selectedWorkspaceSkillSet.disabledSkillKeys.map((key) => {
+                            const row = skillLibraryRows.find((item) => item.key === key);
+                            return (
+                              <div key={`disabled-${key}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded border border-slate-800 bg-slate-900/60 px-2 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedSkillKey(key)}
+                                  className="min-w-0 text-left"
+                                >
+                                  <div className="truncate text-[11px] font-medium text-slate-200">{row?.label || key}</div>
+                                  <div className="mt-1 truncate text-[10px] text-slate-500">{row ? `${row.scope} · ${row.source}` : "未在当前 Skill 库解析到，仍保留 key"}</div>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeWorkspaceSkillKey(selectedWorkspaceManagerRow.book.id, key)}
+                                  className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-400 transition-colors hover:border-red-500/40 hover:text-red-200"
+                                >
+                                  移除
+                                </button>
+                              </div>
+                            );
+                          })}
+                          {!selectedWorkspaceSkillSet.disabledSkillKeys.length && <EmptyBlock text="还没有禁用的工作区 Skill" />}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded border border-slate-800 bg-slate-950/50 px-2 py-2">
+                      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                        <span className="truncate text-[10px] font-semibold text-slate-300">可加入候选</span>
+                        <span className="shrink-0 text-[10px] text-slate-600">{workspaceSkillCandidates.length}</span>
+                      </div>
+                      <div className="grid gap-1 sm:grid-cols-2">
+                        {workspaceSkillCandidates.map((row) => (
+                          <button
+                            key={row.key}
+                            type="button"
+                            onClick={() => setSelectedSkillKey(row.key)}
+                            className={`rounded border px-2 py-2 text-left transition-colors ${
+                              selectedSkillRow?.key === row.key ? "border-fuchsia-500/40 bg-fuchsia-500/10" : "border-slate-800 bg-slate-900/60 hover:border-slate-700 hover:bg-slate-900"
+                            }`}
+                          >
+                            <div className="truncate text-[11px] font-medium text-slate-200">{row.label}</div>
+                            <div className="mt-1 truncate text-[10px] text-slate-500">{row.scope} · {row.source}</div>
+                          </button>
+                        ))}
+                        {!workspaceSkillCandidates.length && <EmptyBlock text="当前 Skill 库没有更多候选" />}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                    <SectionTitle icon={<MessageSquare className="h-4 w-4 text-cyan-300" />} title="工作区线程空间" meta={`${selectedWorkspaceThreads.length}/${selectedWorkspaceManagerRow.activeThreadCount}`} />
+                    <div className="mt-3 space-y-2">
+                      {selectedWorkspaceThreads.map((thread) => (
+                        <button
+                          key={thread.id}
+                          type="button"
+                          onClick={() => selectAgentThread(thread)}
+                          className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-2 text-left transition-colors hover:border-cyan-500/40 hover:bg-slate-900"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-medium text-slate-200">{thread.title}</span>
+                            <StatusBadge status={thread.status} subtle />
+                          </div>
+                          <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{thread.summary || thread.task || "暂无摘要"}</div>
+                        </button>
+                      ))}
+                      {!selectedWorkspaceThreads.length && <EmptyBlock text="这个工作区还没有活跃 Agent 线程" />}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                    <SectionTitle icon={<Clock className="h-4 w-4 text-slate-400" />} title="最近打开" meta={`${selectedWorkspaceRecentRows.length}`} />
+                    <div className="mt-3 space-y-2">
+                      {selectedWorkspaceRecentRows.map((row) => (
+                        <button
+                          key={`${row.book.id}:${row.file.id}`}
+                          type="button"
+                          onClick={() => selectCrossWorkspaceFile(row)}
+                          className="w-full rounded border border-slate-800 bg-slate-950 px-2 py-2 text-left transition-colors hover:border-cyan-500/40 hover:bg-slate-900"
+                        >
+                          <div className="truncate text-xs font-medium text-slate-200">{row.file.title || "未命名文件"}</div>
+                          <div className="mt-1 truncate font-mono text-[10px] text-slate-600">{truncateMiddle(row.path, 38)}</div>
+                        </button>
+                      ))}
+                      {!selectedWorkspaceRecentRows.length && <EmptyBlock text="暂无本地最近打开记录" />}
+                    </div>
+                  </div>
+                </div>
               </div>
-              <ActionButton label="打开工作区" icon={<ArrowUpRight className="h-3.5 w-3.5" />} onClick={() => onOpenBook(activeWorkspace.book.id)} />
+            ) : <EmptyBlock text="选择一个工作区查看上下文边界" />}
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<Network className="h-4 w-4 text-lime-300" />} title="跨工作区定位" meta={`${crossWorkspaceFiles.length} 匹配`} />
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {crossWorkspaceFiles.slice(0, 10).map((row) => (
+                <button
+                  key={`${row.book.id}:${row.file.id}`}
+                  type="button"
+                  onClick={() => selectCrossWorkspaceFile(row)}
+                  className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                    row.selected ? "border-cyan-500/40 bg-cyan-500/10" : "border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-800/70"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-semibold text-slate-200">{row.file.title || "未命名文件"}</span>
+                    <span className="shrink-0 text-[10px] text-slate-500">{row.workspaceDomain}</span>
+                  </div>
+                  <div className="mt-1 truncate text-[10px] text-slate-500">{row.workspaceTitle}</div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-slate-600">{truncateMiddle(row.path, 46)}</div>
+                </button>
+              ))}
+              {!crossWorkspaceFiles.length && <EmptyBlock text="没有跨工作区匹配文件" />}
             </div>
-          ) : <EmptyBlock text="选择或创建工作区" />}
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<Layers className="h-4 w-4 text-cyan-300" />} title="线程空间索引" meta={`${Object.keys(agentThreadSpacesIndex.spaces).length} spaces`} />
+            <div className="mt-3 space-y-2">
+              {agentThreadSpaceRows.map((space) => (
+                <div key={space.key} className={`rounded border px-3 py-2 ${space.active ? "border-cyan-500/30 bg-cyan-500/10" : "border-slate-800 bg-slate-950/40"}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-slate-200">{space.label}</span>
+                    {space.active && <StatusBadge status="当前" subtle />}
+                  </div>
+                  <div className="mt-1 text-[10px] text-slate-500">活跃 {space.count} / 归档 {space.archived}</div>
+                </div>
+              ))}
+              {!agentThreadSpaceRows.length && <EmptyBlock text="暂无线程空间索引" />}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="边界与权限" meta="fail-closed" />
+            <div className="mt-3 space-y-2">
+              {[
+                { label: "项目边界", status: "read-only", detail: "工作区管理器只读取 Library、线程和最近文件索引。" },
+                { label: "写入路径", status: "approval", detail: "新建、克隆、归档、路径索引继续生成 write_file 审批草案。" },
+                { label: "上下文注入", status: "explicit", detail: "文件、Skills、Provider、审批都以 thread_context 附件显式挂载。" },
+                { label: "跨工作区跳转", status: "local", detail: "定位器只切换当前编辑入口，不复制正文、不移动文件。" },
+              ].map((row) => (
+                <div key={row.label} className="rounded border border-slate-800 bg-slate-950/40 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-slate-200">{row.label}</span>
+                    <StatusBadge status={row.status} subtle />
+                  </div>
+                  <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<HardDrive className="h-4 w-4 text-blue-300" />} title="工作区容量" meta="本地索引" />
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <MiniStat label="总文件" value={formatNumber(allWorkspaceSummaries.reduce((sum, item) => sum + item.files, 0))} />
+              <MiniStat label="总字数" value={formatNumber(totalWords)} />
+              <MiniStat label="未绑定线程" value={`${unboundThreadCount}`} tone={unboundThreadCount ? "text-amber-300" : "text-slate-400"} />
+              <MiniStat label="当前空间" value={`${currentWorkspaceThreadCount}`} tone="text-cyan-300" />
+            </div>
+          </div>
         </div>
       </div>
     </>
@@ -6374,13 +8943,15 @@ export function AgentControlCenter({
     const selectedRecord = selectedMemoryRow?.record || {};
     const selectedEvidence = asArray(selectedRecord.evidence).map((item) => String(item)).filter(Boolean);
     const selectedTags = selectedMemoryRow?.tags || [];
+    const selectedStatuses = memoryRecordStatuses(selectedRecord);
     return (
       <div className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MiniStat label="L1 事件" value={formatNumber(asNumber(memory.l1_count))} />
           <MiniStat label="L2 摘要" value={formatNumber(asNumber(memory.l2_count))} tone="text-pink-300" />
           <MiniStat label="待处理" value={formatNumber(asNumber(memory.pending_count))} tone={asNumber(memory.pending_count) ? "text-amber-300" : "text-emerald-300"} />
           <MiniStat label="当前筛选" value={`${filteredMemoryRows.length}`} />
+          <MiniStat label="记忆备份" value={formatNumber(asNumber(memoryBackupPayload.count, memoryBackups.length))} tone="text-blue-300" />
         </div>
 
         <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
@@ -6500,6 +9071,17 @@ export function AgentControlCenter({
                     </div>
                     <StatusBadge status={selectedMemoryRow.kind === "L2" ? "completed" : "pending"} subtle />
                   </div>
+                  <div className="mt-3 grid gap-2">
+                    {selectedStatuses.map((item) => (
+                      <div key={item.label} className="rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-[10px] text-slate-300">{item.label}</span>
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${memoryStatusTone(item.status)}`}>{item.status}</span>
+                        </div>
+                        <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{item.detail}</div>
+                      </div>
+                    ))}
+                  </div>
                   <p className="mt-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-300">{selectedMemoryRow.summary}</p>
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <MiniStat label="重要度" value={displayValue(selectedRecord.importance, "n/a")} tone="text-amber-300" />
@@ -6547,6 +9129,23 @@ export function AgentControlCenter({
                       <StatusBadge status={memoryDraftAction.status} />
                     </div>
                     <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{memoryDraftAction.detail}</p>
+                    {memoryDraftDiff.length > 0 && (
+                      <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-3">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-cyan-100">Diff 预览</span>
+                          <span className="text-[10px] text-slate-500">审批前审查</span>
+                        </div>
+                        <div className="grid gap-2">
+                          {memoryDraftDiff.map((row) => (
+                            <div key={row.field} className="grid gap-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-2 text-[10px] md:grid-cols-[86px_minmax(0,1fr)_minmax(0,1fr)]">
+                              <span className="font-mono text-cyan-300">{row.field}</span>
+                              <span className="min-w-0 truncate text-slate-500" title={row.before}>原值: {row.before}</span>
+                              <span className="min-w-0 truncate text-emerald-300" title={row.after}>草案: {row.after}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {memoryDraftAction.request && (
                       <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 px-2 py-2 font-mono text-[10px] leading-relaxed text-slate-400">
                         {JSON.stringify(memoryDraftAction.request, null, 2)}
@@ -6561,6 +9160,58 @@ export function AgentControlCenter({
                 )}
               </div>
             ) : <EmptyBlock text="选择一条记忆后查看详情" />}
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<HardDrive className="h-4 w-4 text-blue-300" />} title="记忆备份 / 恢复草案" meta={`${memoryBackups.length} 个快照`} />
+            <div className="grid gap-2 md:grid-cols-2">
+              {memoryBackups.length ? memoryBackups.map((backup) => {
+                const backupName = asString(backup.name);
+                return (
+                  <div key={backupName || asString(backup.path)} className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-white" title={backupName}>{backupName || "未命名备份"}</div>
+                        <PathLine value={asString(backup.path)} />
+                      </div>
+                      <StatusBadge status="snapshot" subtle />
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <MiniStat label="L1" value={formatNumber(asNumber(backup.l1_count))} />
+                      <MiniStat label="L2" value={formatNumber(asNumber(backup.l2_count))} tone="text-pink-300" />
+                      <MiniStat label="大小" value={`${Math.max(1, Math.round(asNumber(backup.size) / 1024))} KB`} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-500">
+                      <span>{formatDateTime(backup.modified_at)}</span>
+                      {asString(backup.sha256) && <span className="font-mono">sha {asString(backup.sha256)}</span>}
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                      <ActionButton
+                        label="恢复草案"
+                        icon={<Clock className="h-3.5 w-3.5" />}
+                        onClick={() => createMemoryDraftAction("restore", selectedMemoryRow, backup)}
+                      />
+                    </div>
+                  </div>
+                );
+              }) : <EmptyBlock text="暂无可恢复备份；Memory 执行器会在修改前自动创建备份。" />}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="恢复闸门" meta="Memory" />
+            <div className="grid gap-2">
+              <MiniStat label="当前 L1" value={formatNumber(asNumber(memoryBackupCurrent.l1_count, asNumber(memory.l1_count)))} />
+              <MiniStat label="当前 L2" value={formatNumber(asNumber(memoryBackupCurrent.l2_count, asNumber(memory.l2_count)))} tone="text-pink-300" />
+              <MiniStat label="当前状态文件" value={pathBaseName(asString(memoryBackupCurrent.path, "autodream-state.json"))} />
+            </div>
+            <p className="mt-3 text-[10px] leading-relaxed text-slate-500">
+              {asString(memoryBackupPayload.restore_gate, "memory_restore 只生成审批草案；真正恢复需要 approval_decide、Gateway --execute-memory 和前端显式 execute。")}
+            </p>
+            <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-3 text-[10px] leading-relaxed text-amber-100">
+              恢复不会在这里直接发生。审批执行时 Gateway 会先备份当前 AutoDream 状态，再把选中的备份恢复为当前状态。
+            </div>
           </div>
         </div>
       </div>
@@ -6593,13 +9244,14 @@ export function AgentControlCenter({
       {renderWorkbenchHeader({
         icon: <Sparkles className="h-4 w-4" />,
         eyebrow: "Skills / 领域 Agent",
-        title: "Skills 路由器",
-        description: "Skills 是灵枢的能力层：按任务域挂载、隔离工具、预览输入输出，并在显式 gate 下运行已激活能力。",
-        status: `${prompts.length + customPrompts.length} 个 Skills`,
+        title: "Skills 库 / 路由管理器",
+        description: "Skills 是灵枢的能力层：读取 Codex、本地和写作 Skills，按任务域路由到线程上下文；脚本运行仍必须走显式 gate。",
+        status: `${skillLibraryRows.length || prompts.length + customPrompts.length} 个 Skills`,
         actions: (
           <>
             <ActionButton label="Skills 地图" icon={<FolderKanban className="h-3.5 w-3.5" />} onClick={() => onOpenOverview?.()} disabled={!onOpenOverview} />
-            <ActionButton label="匹配写作 Agent" icon={<Sparkles className="h-3.5 w-3.5" />} onClick={() => void runQuickAction("匹配写作 Agent", "skill_route", { task: "继续灵枢 LumenOS 与 Writing Agent 开发", domain: "writing", local_limit: 10 })} disabled={!state.online || quickAction.status === "running"} />
+            <ActionButton label="运行路由预览" icon={<Sparkles className="h-3.5 w-3.5" />} onClick={() => void runSkillRoutePreview()} disabled={!state.online || skillRoutePreview.status === "running"} />
+            <ActionButton label="挂选中 Skill" icon={<Layers className="h-3.5 w-3.5" />} onClick={attachSelectedSkillToThread} disabled={!activeThread || !selectedSkillRow} />
           </>
         ),
       })}
@@ -6610,33 +9262,158 @@ export function AgentControlCenter({
         <MiniStat label="根目录" value={`${skillLocalRoots.length}`} />
         <MiniStat label="脚本闸门" value={statusLabel(asString(capabilities.skill_script_execution, "disabled"))} tone="text-amber-300" />
       </div>
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_340px]">
+
+      <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
         <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<Sparkles className="h-4 w-4 text-fuchsia-300" />} title="最近候选" meta={`${skillRecentCandidates.length}`} />
-          <div className="grid max-h-[420px] gap-2 overflow-auto pr-1">
-            {skillRecentCandidates.length ? skillRecentCandidates.slice(0, 8).map((item) => <SkillRow key={asString(item.id, asString(item.title))} item={item} />) : <EmptyBlock text="暂无 Skill 候选" />}
-          </div>
-        </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<CheckCircle2 className="h-4 w-4 text-emerald-300" />} title="已激活 Skills" meta={`${skillRecentActivated.length}`} />
-          <div className="grid max-h-[420px] gap-2 overflow-auto pr-1">
-            {skillRecentActivated.length ? skillRecentActivated.slice(0, 8).map((item) => <SkillRow key={asString(item.id, asString(item.title))} item={item} />) : <EmptyBlock text="暂无已激活 Skill" />}
-          </div>
-        </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <SectionTitle icon={<HardDrive className="h-4 w-4 text-blue-300" />} title="本地 Skill 根目录" meta={`${skillLocalRoots.length}`} />
-          <div className="grid gap-2">
-            {skillLocalRoots.map((root) => (
-              <div key={asString(root.key, asString(root.path))} className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="truncate text-xs text-slate-300">{asString(root.label, asString(root.key, "根目录"))}</span>
-                  <span className={asBoolean(root.exists) ? "text-[10px] text-emerald-300" : "text-[10px] text-red-300"}>{asNumber(root.skill_count)} 个 Skills</span>
-                </div>
-                <PathLine value={asString(root.path)} />
+          <SectionTitle icon={<Sparkles className="h-4 w-4 text-fuchsia-300" />} title="路由预览" meta={skillRoutePreview.status ? statusLabel(skillRoutePreview.status) : "只读"} />
+          <div className="grid gap-3">
+            <label className="grid gap-1 text-[10px] text-slate-500">
+              任务
+              <textarea
+                value={skillRouteTask}
+                onChange={(event) => setSkillRouteTask(event.target.value)}
+                rows={4}
+                className="min-h-[96px] resize-none rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs leading-relaxed text-slate-200 outline-none focus:border-fuchsia-500/50"
+              />
+            </label>
+            <label className="grid gap-1 text-[10px] text-slate-500">
+              领域
+              <select
+                value={skillScopeFilter}
+                onChange={(event) => setSkillScopeFilter(event.target.value as SkillScopeFilter)}
+                className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-200 outline-none focus:border-fuchsia-500/50"
+              >
+                <option value="all">全部领域</option>
+                {skillScopeOptions.map((scope) => <option key={scope} value={scope}>{scope}</option>)}
+              </select>
+            </label>
+            <ActionButton label="运行路由预览" icon={<Sparkles className="h-3.5 w-3.5" />} onClick={() => void runSkillRoutePreview()} disabled={!state.online || skillRoutePreview.status === "running"} />
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-slate-200">路由结果</span>
+                <StatusBadge status={skillRoutePreview.status || "idle"} subtle />
               </div>
-            ))}
-            {!skillLocalRoots.length && <EmptyBlock text="等待本地 Skill 根目录" />}
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                {skillRoutePreview.detail || "输入任务后预览 active_core_skills、active_local_skills、isolated_skills 和安全说明。"}
+              </p>
+              {Object.keys(skillRouteSchema).length > 0 && (
+                <div className="mt-3 grid gap-2 text-[10px]">
+                  <MiniStat label="核心" value={`${skillRouteCoreSkills.length}`} tone="text-fuchsia-300" />
+                  <MiniStat label="本地" value={`${skillRouteLocalSkills.length}`} tone="text-cyan-300" />
+                  <MiniStat label="隔离" value={`${skillRouteIsolatedSkills.length}`} tone={skillRouteIsolatedSkills.length ? "text-amber-300" : "text-slate-300"} />
+                  <MiniStat label="执行" value={asString(skillRouteSchema.execution, "route-only")} />
+                </div>
+              )}
+            </div>
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-3 text-[10px] leading-relaxed text-amber-100">
+              `skill_route` / `skill_invoke` 只读 SKILL.md 指令；`skill_run` 仍需要 Gateway `--execute-skill` 和 `payload.execute=true`。
+            </div>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+          <SectionTitle icon={<Library className="h-4 w-4 text-cyan-300" />} title="Skill 库" meta={`${filteredSkillRows.length} / ${skillLibraryRows.length}`} />
+          <div className="mb-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_150px]">
+            <input
+              value={skillSearch}
+              onChange={(event) => setSkillSearch(event.target.value)}
+              placeholder="搜索名称 / 路径 / 标签 / root"
+              className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+            />
+            <button
+              type="button"
+              onClick={() => { setSkillSearch(""); setSkillScopeFilter("all"); }}
+              className="rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-400 transition-colors hover:border-cyan-500/40 hover:text-slate-200"
+            >
+              清筛选
+            </button>
+          </div>
+          <div className="grid max-h-[620px] gap-2 overflow-auto pr-1">
+            {filteredSkillRows.length ? filteredSkillRows.map((row) => (
+              <button
+                type="button"
+                key={row.key}
+                onClick={() => setSelectedSkillKey(row.key)}
+                className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                  selectedSkillRow?.key === row.key
+                    ? "border-cyan-500/40 bg-cyan-500/10"
+                    : "border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-900"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-100">{row.label}</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
+                      <span>{row.scope}</span>
+                      <span>{row.rootLabel || row.source}</span>
+                      {asNumber(row.record.score) > 0 && <span>score {asNumber(row.record.score)}</span>}
+                    </div>
+                  </div>
+                  <StatusBadge status={row.status} subtle />
+                </div>
+                <p className="mt-2 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{row.description || row.key}</p>
+                <PathLine value={row.path || row.key} />
+              </button>
+            )) : <EmptyBlock text="没有匹配的 Skills；可清空筛选或运行路由预览。" />}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+          <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="Skill 检查器" meta={selectedSkillRow ? selectedSkillRow.scope : "未选择"} />
+          {selectedSkillRow ? (
+            <div className="grid gap-3">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-white">{selectedSkillRow.label}</div>
+                    <div className="mt-1 truncate text-[10px] text-slate-500">{selectedSkillRow.key}</div>
+                  </div>
+                  <StatusBadge status={selectedSkillRow.status} />
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-slate-300">{selectedSkillRow.description || "等待 SKILL.md 描述。"}</p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <MiniStat label="scope" value={selectedSkillRow.scope} />
+                  <MiniStat label="source" value={selectedSkillRow.source} />
+                  <MiniStat label="chars" value={formatNumber(asNumber(selectedSkillRow.record.instruction_chars))} />
+                  <MiniStat label="mode" value={asString(selectedSkillRow.record.invocation_mode, "instruction")} />
+                </div>
+                <PathLine value={selectedSkillRow.path} />
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {selectedSkillRow.tags.slice(0, 8).map((tag) => <span key={tag} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{tag}</span>)}
+                  {!selectedSkillRow.tags.length && <span className="text-[10px] text-slate-600">暂无标签</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <ActionButton label="挂入当前线程" icon={<Layers className="h-3.5 w-3.5" />} onClick={attachSelectedSkillToThread} disabled={!activeThread} />
+                  <ActionButton label="打开 Skills 地图" icon={<FolderKanban className="h-3.5 w-3.5" />} onClick={() => onOpenOverview?.()} disabled={!onOpenOverview} />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                <SectionTitle icon={<HardDrive className="h-4 w-4 text-blue-300" />} title="本地根目录" meta={`${skillLocalRoots.length}`} />
+                <div className="grid gap-2">
+                  {skillLocalRoots.map((root) => (
+                    <div key={asString(root.key, asString(root.path))} className="rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-[10px] text-slate-300">{asString(root.label, asString(root.key, "根目录"))}</span>
+                        <span className={asBoolean(root.exists) ? "text-[10px] text-emerald-300" : "text-[10px] text-red-300"}>{asNumber(root.skill_count)}</span>
+                      </div>
+                      <PathLine value={asString(root.path)} />
+                    </div>
+                  ))}
+                  {!skillLocalRoots.length && <EmptyBlock text="等待本地 Skill 根目录" />}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                <SectionTitle icon={<ListChecks className="h-4 w-4 text-lime-300" />} title="路由安全说明" meta={`${skillRouteSafety.length}`} />
+                <div className="grid gap-2">
+                  {skillRouteSafety.length ? skillRouteSafety.map((item) => (
+                    <div key={item} className="rounded border border-slate-800 bg-slate-900/70 px-2 py-2 text-[10px] leading-relaxed text-slate-500">{item}</div>
+                  )) : <EmptyBlock text="运行路由预览后显示 Gateway 安全说明" />}
+                </div>
+              </div>
+            </div>
+          ) : <EmptyBlock text="选择一个 Skill 后查看路径、标签、调用模式和安全边界" />}
         </div>
       </div>
     </>
@@ -6707,8 +9484,8 @@ export function AgentControlCenter({
         actions: (
           <>
             <ActionButton label="API 设置" icon={<Settings className="h-3.5 w-3.5" />} onClick={onOpenSettings} />
-            <ActionButton label="状态检查" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void runProviderAction("模型 Provider 状态", "provider_status", providerPayload)} disabled={!state.online || quickAction.status === "running" || !settings.apiUrl.trim()} />
-            <ActionButton label="探针草案" icon={<Network className="h-3.5 w-3.5" />} onClick={() => void runProviderAction("模型探针草案", "provider_probe", providerPayload)} disabled={!state.online || quickAction.status === "running" || !settings.apiUrl.trim()} />
+            <ActionButton label="草案检查" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={runProviderDraftStatus} disabled={!state.online || quickAction.status === "running" || !providerConfigDraft.apiUrl.trim()} />
+            <ActionButton label="探针审批" icon={<Network className="h-3.5 w-3.5" />} onClick={runProviderDraftProbe} disabled={!state.online || quickAction.status === "running" || !providerDraftReady} />
             <ActionButton label="刷新目录" icon={<RefreshCw className="h-3.5 w-3.5" />} onClick={() => void runProviderAction("刷新模型目录", "provider_catalog", { limit: 20 })} disabled={!state.online || quickAction.status === "running"} />
           </>
         ),
@@ -6770,6 +9547,182 @@ export function AgentControlCenter({
             </div>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <SectionTitle icon={<Settings className="h-4 w-4 text-cyan-300" />} title="Provider 配置草案" meta={statusLabel(providerConfigDraft.status || "draft")} />
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    选择预设
+                    <select
+                      value={providerConfigDraft.presetId}
+                      onChange={(event) => {
+                        const preset = providerPresetOptions.find((item) => asString(item.id) === event.target.value);
+                        if (preset) applyProviderPresetToDraft(preset);
+                        else resetProviderDraftFromSettings();
+                      }}
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    >
+                      <option value="">当前 API 设置 / 手动草案</option>
+                      {providerPresetOptions.map((preset) => (
+                        <option key={asString(preset.id, asString(preset.label))} value={asString(preset.id)}>
+                          {asString(preset.label, asString(preset.id))}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    Provider 类型
+                    <select
+                      value={providerDraftProvider}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({
+                        ...prev,
+                        profileId: "",
+                        provider: event.target.value as ApiSettings["provider"],
+                        presetId: "",
+                        status: "draft",
+                        detail: "已修改 Provider 类型；仍是本地配置草案。",
+                        at: Date.now(),
+                      }))}
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    >
+                      {Object.entries(PROVIDER_LABELS).map(([id, label]) => (
+                        <option key={id} value={id}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500 md:col-span-2">
+                    API endpoint
+                    <input
+                      value={providerConfigDraft.apiUrl}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({
+                        ...prev,
+                        profileId: "",
+                        apiUrl: event.target.value,
+                        presetId: "",
+                        status: "draft",
+                        detail: "已修改 endpoint；状态检查仍只读，探针仍需审批。",
+                        at: Date.now(),
+                      }))}
+                      placeholder="https://api.openai.com/v1 或 http://localhost:11434"
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    模型 ID
+                    <input
+                      value={providerConfigDraft.modelId}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({
+                        ...prev,
+                        profileId: "",
+                        presetId: "",
+                        modelId: event.target.value,
+                        status: "draft",
+                        detail: "已修改模型 ID；仍是本地配置草案。",
+                        at: Date.now(),
+                      }))}
+                      placeholder="gpt-4o-mini / qwen2.5:14b"
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    显示名
+                    <input
+                      value={providerConfigDraft.modelName}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({
+                        ...prev,
+                        modelName: event.target.value,
+                        status: "draft",
+                        detail: "已修改显示名；不会写入设置。",
+                        at: Date.now(),
+                      }))}
+                      placeholder="用于界面显示"
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    Temperature
+                    <input
+                      value={providerConfigDraft.temperature}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({ ...prev, temperature: event.target.value, status: "draft", at: Date.now() }))}
+                      placeholder="0.2"
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    Max tokens
+                    <input
+                      value={providerConfigDraft.maxTokens}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({ ...prev, maxTokens: event.target.value, status: "draft", at: Date.now() }))}
+                      placeholder="Provider 默认"
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-[10px] text-slate-500">
+                    探针超时秒数
+                    <input
+                      value={providerConfigDraft.timeoutSeconds}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({ ...prev, timeoutSeconds: event.target.value, status: "draft", at: Date.now() }))}
+                      placeholder="5"
+                      className="h-9 rounded-lg border border-slate-800 bg-slate-950 px-3 font-mono text-xs text-slate-200 outline-none focus:border-cyan-500/50"
+                    />
+                  </label>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <MiniStat label="草案端点" value={providerDraftEndpointLocal ? "本地" : providerConfigDraft.apiUrl ? "远程" : "未配置"} tone={providerDraftEndpointLocal ? "text-emerald-300" : providerConfigDraft.apiUrl ? "text-blue-300" : "text-amber-300"} />
+                    <MiniStat label="密钥需求" value={settings.apiKey ? "已填写" : providerDraftKeyOptional ? "可选" : "必填"} tone={settings.apiKey || providerDraftKeyOptional ? "text-emerald-300" : "text-amber-300"} />
+                    <MiniStat label="草案来源" value={providerConfigDraft.profileId ? "更新档案" : providerConfigDraft.presetId ? "预设草案" : "新档案"} tone={providerConfigDraft.profileId ? "text-cyan-300" : providerConfigDraft.presetId ? "text-blue-300" : "text-slate-300"} />
+                  </div>
+                  <label className="mt-3 flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={providerConfigDraft.allowRemoteModel}
+                      disabled={providerDraftEndpointLocal || !providerConfigDraft.apiUrl.trim()}
+                      onChange={(event) => setProviderConfigDraft((prev) => ({
+                        ...prev,
+                        allowRemoteModel: event.target.checked,
+                        status: "draft",
+                        detail: event.target.checked
+                          ? "远程授权标记只写入探针草案 payload；没有 execute=true 仍不会联网。"
+                          : "已关闭远程授权标记。",
+                        at: Date.now(),
+                      }))}
+                      className="mt-0.5"
+                    />
+                    <span className="leading-relaxed">
+                      将 `allow_remote_model=true` 写入探针审批草案。当前按钮仍不带 `execute=true`，因此只进入 Gateway 审批/阻塞轨迹，不会直接访问远程模型。
+                    </span>
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <ActionButton label="恢复当前设置" icon={<RefreshCw className="h-3.5 w-3.5" />} onClick={resetProviderDraftFromSettings} />
+                  <ActionButton label="保存为档案" icon={<Save className="h-3.5 w-3.5" />} onClick={() => saveProviderDraftProfile(false)} disabled={!providerDraftReady} />
+                  <ActionButton label="保存并激活" icon={<CheckCircle2 className="h-3.5 w-3.5" />} onClick={() => saveProviderDraftProfile(true)} disabled={!providerDraftReady} />
+                  <ActionButton label="草案状态检查" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={runProviderDraftStatus} disabled={!state.online || quickAction.status === "running" || !providerConfigDraft.apiUrl.trim()} />
+                  <ActionButton label="生成探针审批" icon={<Network className="h-3.5 w-3.5" />} onClick={runProviderDraftProbe} disabled={!state.online || quickAction.status === "running" || !providerDraftReady} />
+                  <ActionButton label="挂入当前线程" icon={<Layers className="h-3.5 w-3.5" />} onClick={attachProviderDraftToThread} disabled={!activeThread || !providerDraftReady} />
+                </div>
+                <div className="text-[10px] leading-relaxed text-slate-500">
+                  {providerConfigDraft.detail} 保存档案只更新本地 `novelsmith-api-settings`，不访问模型端点；API key 只以存在/缺失状态进入检查器，页面不会显示明文密钥。
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                  <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="脱敏运行时 payload" meta="预览" />
+                  <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 text-[10px] leading-relaxed text-slate-400">
+                    {JSON.stringify(redactedProviderDraftPayload, null, 2)}
+                  </pre>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                  <SectionTitle icon={<Network className="h-4 w-4 text-cyan-300" />} title="探针审批 payload" meta="execute=false" />
+                  <pre className="mt-3 max-h-48 overflow-auto rounded-lg bg-slate-950 p-3 text-[10px] leading-relaxed text-slate-400">
+                    {JSON.stringify(redactedProviderDraftProbePayload, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <SectionTitle icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />} title="Provider 闸门" meta="探针 / Worker" />
             <div className="grid gap-2 md:grid-cols-3">
               <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
@@ -6784,7 +9737,7 @@ export function AgentControlCenter({
                   <span className="text-xs font-medium text-slate-200">探针草案</span>
                   <StatusBadge status="approval_required" subtle />
                 </div>
-                <p className="mt-2 text-[10px] leading-relaxed text-slate-500">`provider_probe` 默认无 execute，只返回审批草案；远程端点还需要 `allow_remote_model=true`。</p>
+                <p className="mt-2 text-[10px] leading-relaxed text-slate-500">`provider_probe` 默认无 execute，只返回审批草案；审批复核台执行还需要 Gateway `--execute-provider`，远程端点继续需要 `allow_remote_model=true`。</p>
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
                 <div className="flex items-center justify-between gap-3">
@@ -6889,7 +9842,7 @@ export function AgentControlCenter({
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <SectionTitle icon={<Server className="h-4 w-4 text-blue-300" />} title="前端预设库" meta={`${frontendRemoteCount} 远程 / ${frontendLocalCount} 本地`} />
             <div className="grid max-h-[500px] gap-2 overflow-auto pr-1 md:grid-cols-2">
-              {displayProviderPresets.length ? displayProviderPresets.map((preset) => <ProviderRow key={asString(preset.id, asString(preset.label))} item={preset} />) : <EmptyBlock text="等待 Provider 预设" />}
+              {displayProviderPresets.length ? displayProviderPresets.map((preset) => <ProviderRow key={asString(preset.id, asString(preset.label))} item={preset} onApply={applyProviderPresetToDraft} />) : <EmptyBlock text="等待 Provider 预设" />}
             </div>
           </div>
         </div>
@@ -6932,6 +9885,29 @@ export function AgentControlCenter({
                       </div>
                       <StatusBadge status={profile.id === settings.activeProfileId ? "active" : "saved"} subtle />
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applyProviderProfileToDraft(profile)}
+                        className="rounded border border-slate-700 px-2 py-1 text-[10px] text-cyan-200 transition-colors hover:border-cyan-500/40 hover:bg-cyan-500/10"
+                      >
+                        载入草案
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => activateProviderProfile(profile)}
+                        className="rounded border border-slate-700 px-2 py-1 text-[10px] text-emerald-200 transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10"
+                      >
+                        激活
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteProviderProfile(profile.id)}
+                        className="rounded border border-slate-700 px-2 py-1 text-[10px] text-rose-200 transition-colors hover:border-rose-500/40 hover:bg-rose-500/10"
+                      >
+                        删除
+                      </button>
+                    </div>
                   </div>
                 );
               }) : <EmptyBlock text="还没有保存的模型配置档案" />}
@@ -6940,17 +9916,10 @@ export function AgentControlCenter({
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <SectionTitle icon={<Cpu className="h-4 w-4 text-fuchsia-300" />} title="模型 Worker 载荷" meta="草案" />
             <div className="grid gap-2 text-[10px]">
-              {[
-                ["kind", "model_task"],
-                ["provider", effectiveProvider],
-                ["api_url", endpointLabel],
-                ["model_id", settings.modelId || "未设置"],
-                ["execute_model", "false"],
-                ["allow_remote_model", "false"],
-              ].map(([key, value]) => (
+              {Object.entries(redactedProviderDraftWorkerPayload).map(([key, value]) => (
                 <div key={key} className="grid grid-cols-[110px_minmax(0,1fr)] gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2">
                   <span className="text-slate-500">{key}</span>
-                  <span className="truncate font-mono text-slate-300" title={value}>{value}</span>
+                  <span className="truncate font-mono text-slate-300" title={displayValue(value)}>{displayValue(value)}</span>
                 </div>
               ))}
             </div>
@@ -7013,6 +9982,7 @@ export function AgentControlCenter({
         status: phaseStatus,
         actions: (
           <>
+            <ActionButton label="同步现有协议" icon={<RefreshCw className="h-3.5 w-3.5" />} onClick={() => void syncSpecProtocolFiles()} disabled={!state.online || specProtocolSync.status === "running"} />
             <ActionButton label="生成协议草案" icon={<FileText className="h-3.5 w-3.5" />} onClick={createSpecProtocolDraft} />
             <ActionButton label="提交写入审批" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void submitSpecProtocolApprovals()} disabled={!state.online || specProtocolDraft.status === "running"} />
             <ActionButton label="KAIROS Tick" icon={<Timer className="h-3.5 w-3.5" />} onClick={() => void runQuickAction("KAIROS Tick", "kairos_tick", { include_suggestions: true, limit: 5 })} disabled={!state.online || quickAction.status === "running"} />
@@ -7075,26 +10045,33 @@ export function AgentControlCenter({
               <div className="min-w-0">
                 <SectionTitle icon={<FileText className="h-4 w-4 text-cyan-300" />} title="项目协议草案" meta=".lumen/specs / steering / hooks" />
                 <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                  生成 Requirements、Design、Tasks、Steering 与 Hooks 草案；提交时逐个调用 `write_file`，默认只进入审批队列。
+                  读取现有 Requirements、Design、Tasks、Steering 与 Hooks，再与当前草案做 diff；提交时逐个调用 `write_file`，默认只进入审批队列。
                 </p>
               </div>
               <StatusBadge status={specProtocolDraft.status || "not_generated"} subtle />
             </div>
             <div className="mt-3 grid gap-2">
-              {(specProtocolDraft.files.length ? specProtocolDraft.files : buildSpecProtocolFiles()).map((file) => (
+              {specProtocolDraftFiles.map((file) => {
+                const existing = specProtocolExistingByPath.get(file.path);
+                const diffRow = specProtocolDiffRows.find((row) => row.path === file.path);
+                return (
                 <div key={file.path} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate text-[10px] font-medium text-slate-200">{file.title}</span>
                       <span className="rounded bg-slate-950 px-1.5 py-0.5 text-[10px] text-cyan-200">{file.kind}</span>
+                      {existing && <span className="rounded bg-slate-950 px-1.5 py-0.5 text-[10px] text-slate-400">现有: {statusLabel(existing.status)}</span>}
+                      {diffRow && <span className="rounded bg-slate-950 px-1.5 py-0.5 text-[10px] text-amber-200">{statusLabel(diffRow.status)}</span>}
                     </div>
                     <PathLine value={file.path} />
                   </div>
                   <span className="shrink-0 rounded bg-slate-950 px-2 py-1 font-mono text-[10px] text-slate-500">{formatNumber(file.content.length)} chars</span>
                 </div>
-              ))}
+                );
+              })}
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
+              <ActionButton label="同步现有协议" icon={<RefreshCw className="h-3.5 w-3.5" />} onClick={() => void syncSpecProtocolFiles()} disabled={!state.online || specProtocolSync.status === "running"} />
               <ActionButton label="生成协议草案" icon={<FileText className="h-3.5 w-3.5" />} onClick={createSpecProtocolDraft} />
               <ActionButton label="提交 write_file 审批" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void submitSpecProtocolApprovals()} disabled={!state.online || specProtocolDraft.status === "running"} />
               <button
@@ -7110,6 +10087,39 @@ export function AgentControlCenter({
                 {specProtocolDraft.detail}
               </div>
             )}
+            {specProtocolSync.detail && (
+              <div className="mt-3 rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] leading-relaxed text-lime-100">
+                {specProtocolSync.detail}
+              </div>
+            )}
+            <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <SectionTitle icon={<GitBranch className="h-4 w-4 text-amber-300" />} title="协议 Diff 审查" meta={`${specProtocolDiffRows.length} 文件`} />
+                <StatusBadge status={specProtocolSync.status || "not_synced"} subtle />
+              </div>
+              <div className="grid gap-2">
+                {specProtocolDiffRows.map((row) => (
+                  <details key={row.path} className="rounded border border-slate-800 bg-slate-900/70 px-2 py-2">
+                    <summary className="cursor-pointer text-[10px] text-slate-300">
+                      <span className="font-medium text-slate-100">{row.title}</span>
+                      <span className="ml-2 text-slate-500">{row.path}</span>
+                      <span className="ml-2 text-amber-300">+{row.added} / -{row.removed}</span>
+                    </summary>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <MiniStat label="现有" value={`${formatNumber(row.beforeLength)} chars`} />
+                      <MiniStat label="草案" value={`${formatNumber(row.afterLength)} chars`} tone="text-cyan-300" />
+                      <MiniStat label="状态" value={statusLabel(row.status)} tone={row.status === "unchanged" ? "text-emerald-300" : "text-amber-300"} />
+                    </div>
+                    <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{row.detail}</p>
+                    <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 px-2 py-2 font-mono text-[10px] leading-relaxed text-slate-400">
+                      {row.diff.length
+                        ? row.diff.map((line) => `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "} ${line.text}`).join("\n")
+                        : "暂无 diff；同步现有协议后会显示草案对比。"}
+                    </pre>
+                  </details>
+                ))}
+              </div>
+            </div>
             {(specProtocolDraft.request || specProtocolDraft.result) && (
               <div className="mt-3 grid gap-3 lg:grid-cols-2">
                 {specProtocolDraft.request && (
@@ -7551,7 +10561,7 @@ export function AgentControlCenter({
                   <span className="shrink-0 text-[10px] text-slate-600">{recentWorkspaceFiles.length}</span>
                 </div>
                 <div className="grid gap-1">
-                  {recentWorkspaceFiles.map(({ file, words }) => {
+                  {recentWorkspaceFiles.map(({ file, path, words }) => {
                     const selected = selectedExplorerFile?.id === file.id;
                     return (
                       <button
@@ -7565,7 +10575,7 @@ export function AgentControlCenter({
                       >
                         <span className="min-w-0">
                           <span className="block truncate text-[11px]">{file.title || "未命名文件"}</span>
-                          <span className="block truncate text-[10px] text-slate-600">{file.category || "未分组"} · {formatDateTime(file.updatedAt)}</span>
+                          <span className="block truncate font-mono text-[10px] text-slate-600">{path}</span>
                         </span>
                         <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{formatNumber(words)}</span>
                       </button>
@@ -7574,6 +10584,71 @@ export function AgentControlCenter({
                 </div>
               </div>
             )}
+            <div className="mt-3 rounded border border-slate-800 bg-slate-950/40 px-2 py-2">
+              <div className="mb-1 flex items-center justify-between gap-2 px-1">
+                <span className="truncate text-[10px] font-semibold text-slate-300">跨项目最近打开</span>
+                <span className="shrink-0 text-[10px] text-slate-600">{crossWorkspaceRecentRows.length}</span>
+              </div>
+              <div className="grid max-h-28 gap-1 overflow-auto pr-1">
+                {crossWorkspaceRecentRows.length ? crossWorkspaceRecentRows.map((row) => {
+                  const external = row.book.id !== activeWorkspace?.book.id;
+                  return (
+                    <button
+                      key={`cross-recent-${row.book.id}-${row.file.id}`}
+                      type="button"
+                      onClick={() => selectCrossWorkspaceFile(row)}
+                      onDoubleClick={() => openExplorerFileInEditor(row.file.id, row.book.id)}
+                      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                        row.selected ? "bg-cyan-500/10 text-white ring-1 ring-cyan-500/30" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px]">{row.file.title || "未命名文件"}</span>
+                        <span className="block truncate font-mono text-[10px] text-slate-600">{row.path}</span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        {external && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-200">跨项目</span>}
+                        <ArrowUpRight className="h-3.5 w-3.5 text-slate-500" />
+                      </span>
+                    </button>
+                  );
+                }) : <EmptyBlock text="打开文件后会记录本地导航历史" />}
+              </div>
+            </div>
+            <div className="mt-3 rounded border border-slate-800 bg-slate-950/40 px-2 py-2">
+              <div className="mb-1 flex items-center justify-between gap-2 px-1">
+                <span className="truncate text-[10px] font-semibold text-slate-300">跨工作区定位</span>
+                <span className="shrink-0 text-[10px] text-slate-600">{crossWorkspaceFiles.length}</span>
+              </div>
+              <div className="grid max-h-36 gap-1 overflow-auto pr-1">
+                {crossWorkspaceFiles.length ? crossWorkspaceFiles.map((row) => {
+                  const external = row.book.id !== activeWorkspace?.book.id;
+                  return (
+                    <button
+                      key={`cross-${row.book.id}-${row.file.id}`}
+                      type="button"
+                      onClick={() => selectCrossWorkspaceFile(row)}
+                      onDoubleClick={() => openExplorerFileInEditor(row.file.id, row.book.id)}
+                      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
+                        row.selected ? "bg-cyan-500/10 text-white ring-1 ring-cyan-500/30" : "text-slate-400 hover:bg-slate-800/70 hover:text-slate-200"
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px]">{row.file.title || "未命名文件"}</span>
+                        <span className="block truncate font-mono text-[10px] text-slate-600">{row.path}</span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        {external && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-200">跨项目</span>}
+                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{formatNumber(row.words)}</span>
+                      </span>
+                    </button>
+                  );
+                }) : <EmptyBlock text="没有跨工作区匹配文件" />}
+              </div>
+              <div className="mt-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+                点击当前工作区文件会选中预览；点击外部工作区文件会通过现有编辑器入口切换，不生成写入、不改变审批队列。
+              </div>
+            </div>
             <div className="mt-3 grid max-h-72 gap-2 overflow-auto pr-1">
               {workspaceFileGroups.length ? workspaceFileGroups.map((group) => (
                 <div key={group.category} className="rounded border border-slate-800 bg-slate-950/50 px-2 py-2">
@@ -7587,7 +10662,7 @@ export function AgentControlCenter({
                   </button>
                   {!collapsedExplorerCategories.has(group.category) && (
                     <div className="grid gap-1">
-                      {group.files.slice(0, 8).map(({ file, words }) => {
+                      {group.files.slice(0, 8).map(({ file, path, words }) => {
                         const selected = selectedExplorerFile?.id === file.id;
                         return (
                           <button
@@ -7600,7 +10675,7 @@ export function AgentControlCenter({
                           >
                             <span className="min-w-0">
                               <span className="block truncate text-[11px]">{file.kind === "image" ? "图片 · " : ""}{file.title || "未命名文件"}</span>
-                              <span className="block truncate text-[10px] text-slate-600">{formatDateTime(file.updatedAt)}</span>
+                              <span className="block truncate font-mono text-[10px] text-slate-600">{path}</span>
                             </span>
                             <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{formatNumber(words)}</span>
                           </button>
@@ -7865,10 +10940,25 @@ export function AgentControlCenter({
                     <MiniStat label="配置档案" value={activeProfile?.name || "直接设置"} />
                   </div>
                 </div>
+                <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-slate-200">Provider 配置草案</div>
+                      <div className="mt-1 truncate font-mono text-[10px] text-slate-500" title={providerConfigDraft.apiUrl}>{providerDraftEndpointLabel}</div>
+                    </div>
+                    <StatusBadge status={providerConfigDraft.status || "draft"} subtle />
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <MiniStat label="草案模型" value={providerConfigDraft.modelId || "未设置"} tone={providerConfigDraft.modelId ? "text-white" : "text-amber-300"} />
+                    <MiniStat label="草案端点" value={providerDraftEndpointLocal ? "本地" : providerConfigDraft.apiUrl ? "远程" : "未配置"} tone={providerDraftEndpointLocal ? "text-emerald-300" : providerConfigDraft.apiUrl ? "text-blue-300" : "text-amber-300"} />
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{providerConfigDraft.detail}</p>
+                </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <ActionButton label="API 设置" icon={<Settings className="h-3.5 w-3.5" />} onClick={onOpenSettings} />
-                  <ActionButton label="状态检查" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void runProviderAction("模型 Provider 状态", "provider_status", providerPayload)} disabled={!state.online || quickAction.status === "running" || !settings.apiUrl.trim()} />
-                  <ActionButton label="探针草案" icon={<Network className="h-3.5 w-3.5" />} onClick={() => void runProviderAction("模型探针草案", "provider_probe", providerPayload)} disabled={!state.online || quickAction.status === "running" || !settings.apiUrl.trim()} />
+                  <ActionButton label="Provider 中枢" icon={<ArrowUpRight className="h-3.5 w-3.5" />} onClick={() => setActiveView("providers")} />
+                  <ActionButton label="草案检查" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={runProviderDraftStatus} disabled={!state.online || quickAction.status === "running" || !providerConfigDraft.apiUrl.trim()} />
+                  <ActionButton label="探针审批" icon={<Network className="h-3.5 w-3.5" />} onClick={runProviderDraftProbe} disabled={!state.online || quickAction.status === "running" || !providerDraftReady} />
                 </div>
               </div>
               <div>
@@ -7884,7 +10974,7 @@ export function AgentControlCenter({
                   ))}
                 </div>
                 <div className="mt-3 grid max-h-[420px] gap-2 overflow-auto pr-1 md:grid-cols-2">
-                  {displayProviderPresets.length ? displayProviderPresets.map((preset) => <ProviderRow key={asString(preset.id, asString(preset.label))} item={preset} />) : <EmptyBlock text="等待 Provider 预设" />}
+                  {displayProviderPresets.length ? displayProviderPresets.map((preset) => <ProviderRow key={asString(preset.id, asString(preset.label))} item={preset} onApply={applyProviderPresetToDraft} />) : <EmptyBlock text="等待 Provider 预设" />}
                 </div>
               </div>
             </div>
@@ -8005,13 +11095,14 @@ export function AgentControlCenter({
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-white">{selectedExplorerFile.title || "未命名文件"}</div>
                         <div className="mt-1 truncate text-[10px] text-slate-500">{selectedExplorerFile.category} · {formatDateTime(selectedExplorerFile.updatedAt)}</div>
+                        {selectedExplorerPath && <PathLine value={selectedExplorerPath} />}
                       </div>
                       <StatusBadge status={selectedExplorerFile.kind || "text"} subtle />
                     </div>
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       <MiniStat label="字数" value={formatNumber(wordCount(selectedExplorerFile.content).total)} />
                       <MiniStat label="版本" value={`${selectedExplorerFile.history?.length || 0}`} />
-                      <MiniStat label="模式" value="只读" tone="text-emerald-300" />
+                      <MiniStat label="路径" value="虚拟索引" tone="text-cyan-300" />
                     </div>
                   </div>
                   <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 px-3 py-3 text-[10px] leading-relaxed text-slate-400">
@@ -8021,6 +11112,44 @@ export function AgentControlCenter({
                   <div className="grid grid-cols-2 gap-2">
                     <ActionButton label="跳转编辑器" icon={<ArrowUpRight className="h-3.5 w-3.5" />} onClick={() => openExplorerFileInEditor()} disabled={!activeWorkspace} />
                     <ActionButton label="写入走审批" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => selectWorkbenchView("tools")} />
+                  </div>
+                  <div className="rounded-lg border border-cyan-500/15 bg-slate-950/50 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white">文件操作草案</div>
+                        <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                          新建、克隆、归档、路径索引都先生成 `workspace-drafts/*` 的 write_file 审批草案，不直接改当前工作区文件。
+                        </p>
+                      </div>
+                      <StatusBadge status={workspaceFileDraft?.status || "draft"} subtle />
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <ActionButton label="新建草案" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => buildWorkspaceFileDraft("create")} disabled={!activeWorkspace} />
+                      <ActionButton label="克隆草案" icon={<FileText className="h-3.5 w-3.5" />} onClick={() => buildWorkspaceFileDraft("clone")} disabled={!activeWorkspace || !selectedExplorerFile} />
+                      <ActionButton label="归档快照" icon={<Download className="h-3.5 w-3.5" />} onClick={() => buildWorkspaceFileDraft("archive")} disabled={!activeWorkspace || !selectedExplorerFile} />
+                      <ActionButton label="分组归档" icon={<FolderKanban className="h-3.5 w-3.5" />} onClick={() => buildWorkspaceFileDraft("category_archive")} disabled={!activeWorkspace || !selectedExplorerFile} />
+                      <ActionButton label="路径索引" icon={<ListChecks className="h-3.5 w-3.5" />} onClick={() => buildWorkspaceFileDraft("path_index")} disabled={!activeWorkspace || !activeWorkspaceFiles.length} />
+                      <ActionButton label="提交审批" icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => void submitWorkspaceFileDraftApproval()} disabled={!state.online || !workspaceFileDraft || workspaceFileDraft.status === "running"} />
+                    </div>
+                    {workspaceFileDraft && (
+                      <div className="mt-3 rounded border border-slate-800 bg-slate-950 px-2 py-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="truncate text-[10px] font-medium text-cyan-100">{workspaceFileDraft.title}</span>
+                          <StatusBadge status={workspaceFileDraft.status} subtle />
+                        </div>
+                        <PathLine value={workspaceFileDraft.path} />
+                        <p className="mt-2 text-[10px] leading-relaxed text-slate-500">{workspaceFileDraft.detail}</p>
+                        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 px-2 py-2 font-mono text-[10px] leading-relaxed text-slate-500">
+                          {workspaceFileDraft.content.slice(0, 1600)}
+                          {workspaceFileDraft.content.length > 1600 ? "\n\n...草案预览已截断。" : ""}
+                        </pre>
+                        {workspaceFileDraft.result && (
+                          <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950 px-2 py-2 font-mono text-[10px] leading-relaxed text-emerald-300">
+                            {JSON.stringify(workspaceFileDraft.result, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : <EmptyBlock text="从工作区文件树选择文件" />}

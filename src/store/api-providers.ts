@@ -249,6 +249,16 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     group: "router",
   },
   {
+    id: "codex2api-codex",
+    label: "Codex2API · gpt-5.3-codex",
+    provider: "openai-compatible",
+    apiUrl: "https://www.codex2api.com/v1",
+    modelId: "gpt-5.3-codex",
+    modelName: "GPT-5.3 Codex via Codex2API",
+    group: "router",
+    notes: "OpenAI-compatible 聚合端点；模型列表可通过 /models 探测，密钥只保存在本机设置或环境变量中。",
+  },
+  {
     id: "oneapi-local",
     label: "One API / New API",
     provider: "openai-compatible",

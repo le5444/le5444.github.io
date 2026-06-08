@@ -198,21 +198,26 @@ def direct_bridge_request(
     execute_read: bool = False,
     execute_command: bool = False,
     execute_write: bool = False,
+    execute_memory: bool = False,
     execute_scheduler: bool = False,
     execute_web: bool = False,
     execute_mcp: bool = False,
+    execute_provider: bool = False,
     execute_skill: bool = False,
     full_access_files: bool = False,
+    record: bool = False,
 ) -> Dict[str, Any]:
     return bridge.handle_request(
         {"action": action, "purpose": purpose, "payload": payload or {}},
         execute=execute_read,
-        record=False,
+        record=record,
         execute_command=execute_command,
         execute_write=execute_write,
+        execute_memory=execute_memory,
         execute_scheduler=execute_scheduler,
         execute_web=execute_web,
         execute_mcp=execute_mcp,
+        execute_provider=execute_provider,
         execute_skill=execute_skill,
         full_access_files=full_access_files,
     )
@@ -399,6 +404,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
             execute_command=True,
             execute_write=True,
             execute_scheduler=True,
+            execute_provider=True,
             execute_skill=True,
             full_access_files=True,
         )
@@ -658,7 +664,9 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         dry_probe = direct_bridge_request("provider_probe", {"preset_id": "ollama-qwen"})
         assert_true(dry_probe.get("status") == "approval_required", "provider_probe should require payload.execute=true")
         blocked_remote = direct_bridge_request("provider_probe", {"preset_id": "openai-gpt-4o-mini", "execute": True})
-        assert_true(blocked_remote.get("status") == "approval_required", "provider_probe should block remote probes without allow_remote_model")
+        assert_true(blocked_remote.get("status") == "approval_required", "provider_probe should require execute_provider before any probe")
+        blocked_remote_with_gate = direct_bridge_request("provider_probe", {"preset_id": "openai-gpt-4o-mini", "execute": True}, execute_provider=True)
+        assert_true(blocked_remote_with_gate.get("status") == "approval_required", "provider_probe should block remote probes without allow_remote_model")
 
         httpd, api_url = start_healthcheck_provider_server()
         try:
@@ -668,11 +676,35 @@ def run_direct_checks() -> List[Dict[str, Any]]:
                 "model_id": "healthcheck-model",
                 "execute": True,
                 "timeout_seconds": 5,
-            })
+            }, execute_provider=True)
             probe = local_probe.get("provider_probe", {})
             assert_true(local_probe.get("status") == "ok", "provider_probe should execute against local provider endpoint")
             assert_true(probe.get("status_code") == 200, "provider_probe local endpoint should return HTTP 200")
             assert_true(probe.get("model_count") == 1, "provider_probe should count local models")
+
+            queued_probe = direct_bridge_request("provider_probe", {
+                "provider": "openai-compatible",
+                "api_url": api_url,
+                "model_id": "healthcheck-model",
+                "timeout_seconds": 5,
+            }, "healthcheck provider probe approval queue", record=True)
+            assert_true(queued_probe.get("status") == "approval_required", "provider_probe should queue an approval when execute=false")
+            queued_probe_id = str(queued_probe.get("approval_id") or "")
+            assert_true(bool(queued_probe_id), "provider_probe approval should return an approval_id")
+            dry_decision = direct_bridge_request("approval_decide", {
+                "approval_id": queued_probe_id,
+                "decision": "execute",
+                "reason": "healthcheck dry provider probe approval",
+            }, "healthcheck provider probe approval dry")
+            assert_true(dry_decision.get("status") == "approval_required", "provider_probe approval execution should require execute_provider")
+            executed_decision = direct_bridge_request("approval_decide", {
+                "approval_id": queued_probe_id,
+                "decision": "execute",
+                "reason": "healthcheck execute provider probe approval",
+            }, "healthcheck provider probe approval execute", execute_provider=True)
+            provider_execution = executed_decision.get("approval_decide", {}).get("provider_probe", {})
+            assert_true(executed_decision.get("status") == "ok", "provider_probe approval should execute with execute_provider")
+            assert_true(provider_execution.get("model_count") == 1, "executed provider_probe approval should count local models")
         finally:
             httpd.shutdown()
 
@@ -682,6 +714,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
             "local_key_required": local_readiness.get("key_required"),
             "remote_requires_allow": remote_readiness.get("remote_requires_allow_remote_model"),
             "local_probe_models": probe.get("model_count"),
+            "approval_probe_models": provider_execution.get("model_count"),
         }
 
     add("provider_registry", provider_registry)
@@ -861,12 +894,70 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         assert_true(evidence.get("seeded_l1_events", 0) >= 5, "memory_bootstrap should seed L1 events")
         assert_true(evidence.get("created_l2_summaries", 0) >= 1, "memory_bootstrap should create L2 summaries")
         assert_true(evidence.get("retrieved_context_pack", 0) >= 1, "memory_bootstrap should retrieve context pack evidence")
+        managed_id = f"mem-{marker}-approval-exec"
+        managed = direct_bridge_request("memory_event", {
+            "event_id": managed_id,
+            "dimension": "tool",
+            "source": "healthcheck",
+            "summary": f"{marker} memory approval before.",
+            "tags": ["healthcheck", "memory-approval"],
+            "importance": 2,
+        }, "healthcheck memory approval seed")
+        assert_true(managed.get("status") == "ok", "memory approval seed event should succeed")
+        approval = direct_bridge_request("memory_update", {
+            "target_id": managed_id,
+            "target_kind": "L1",
+            "dimension": "tool",
+            "patch": {
+                "summary": f"{marker} memory approval after.",
+                "tags": ["healthcheck", "memory-approval", "executed"],
+                "importance": 4,
+            },
+            "reason": "healthcheck memory approval execution",
+        }, "healthcheck memory approval queue")
+        assert_true(approval.get("status") == "approval_required", "memory_update should queue an approval")
+        approval_id = str(approval.get("approval_id") or "")
+        dry_decision = direct_bridge_request("approval_decide", {
+            "approval_id": approval_id,
+            "decision": "execute",
+            "reason": "healthcheck dry memory approval execution",
+        }, "healthcheck memory approval dry")
+        assert_true(dry_decision.get("status") == "approval_required", "memory approval execution should require execute_memory")
+        executed_decision = direct_bridge_request("approval_decide", {
+            "approval_id": approval_id,
+            "decision": "execute",
+            "reason": "healthcheck execute memory approval",
+        }, "healthcheck memory approval execute", execute_memory=True)
+        memory_execution = executed_decision.get("approval_decide", {}).get("memory_management", {})
+        assert_true(executed_decision.get("status") == "ok", "memory approval execution should succeed with execute_memory")
+        assert_true(memory_execution.get("operation") == "updated", "memory approval should update the target record")
+        assert_true(bool(memory_execution.get("backup_path")), "memory approval should create an AutoDream backup")
+        updated = bridge.find_memory_record(bridge.load_memory_state(), managed_id, "L1")
+        assert_true(updated.get("record", {}).get("summary") == f"{marker} memory approval after.", "memory approval should persist the patched summary")
+        backup_status = direct_bridge_request("memory_backup_status", {"limit": 5}, "healthcheck memory backup status")
+        backups = backup_status.get("memory_backup_status", {}).get("backups", [])
+        assert_true(backup_status.get("status") == "ok", "memory_backup_status should succeed")
+        assert_true(bool(backups), "memory_backup_status should list at least one backup after memory approval execution")
+        restore_backup_name = str(backups[0].get("name") or "")
+        restore_approval = direct_bridge_request("memory_restore", {
+            "backup_name": restore_backup_name,
+            "reason": "healthcheck memory restore approval draft only",
+        }, "healthcheck memory restore queue")
+        assert_true(restore_approval.get("status") == "approval_required", "memory_restore should queue an approval")
+        restore_proposal = restore_approval.get("memory_management", {})
+        assert_true(restore_proposal.get("target_kind") == "state", "memory_restore proposal should target AutoDream state")
+        assert_true(restore_proposal.get("backup_name") == restore_backup_name, "memory_restore proposal should include the selected backup name")
         return {
             "autodream": tick.get("status"),
             "pending": status.get("memory", {}).get("pending_count"),
             "retrieved": len(context_pack),
             "bootstrap_l1": evidence.get("seeded_l1_events"),
             "bootstrap_l2": evidence.get("created_l2_summaries"),
+            "approval_dry": dry_decision.get("status"),
+            "approval_execute": memory_execution.get("operation"),
+            "approval_backup": memory_execution.get("backup_path"),
+            "backup_count": backup_status.get("memory_backup_status", {}).get("count"),
+            "restore_approval": restore_approval.get("status"),
         }
 
     add("memory_autodream", memory)
