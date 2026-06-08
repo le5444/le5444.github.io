@@ -99,6 +99,26 @@ function providerModelsFromGatewayResult(result: unknown): ModelDiscoveryItem[] 
     .filter((item) => item.id);
 }
 
+function providerProbeFailureMessage(probe: Record<string, unknown>) {
+  const status = asString(probe.status, "error");
+  const statusCode = asNumber(probe.status_code);
+  const reason = asString(probe.reason);
+  const text = asString(probe.text);
+  if (status === "approval_required") {
+    return reason || "Gateway 未开启 --execute-provider，或远程探针未授权。";
+  }
+  if (status === "http_error") {
+    if (statusCode === 401) return "端点已到达，但 API key 缺失或格式不被接受。请确认密钥已填写，并使用 Bearer / x-api-key 兼容的 Provider。";
+    if (statusCode === 403) return "端点已到达，但服务端拒绝当前 API key。常见原因是 key 权限、额度、模型白名单或账号绑定不匹配。";
+    if (statusCode === 404 || statusCode === 405) return "端点已到达，但 `/models` 路径不可用。请确认 base URL 是否应填到 `/v1`，或该 Provider 是否支持模型列表接口。";
+    return `端点返回 HTTP ${statusCode || "错误"}${reason ? `：${reason}` : ""}`;
+  }
+  if (status === "network_error") {
+    return reason ? `网络连接失败：${reason}` : "网络连接失败，请检查 base URL、代理、防火墙或 TLS 证书。";
+  }
+  return (reason || text || "模型列表获取失败。").slice(0, 260);
+}
+
 // Settings Modal
 export function SettingsModal({ open, settings, onClose, onSave }: { open: boolean; settings: ApiSettings; onClose: () => void; onSave: (next: ApiSettings) => void; }) {
   const [form, setForm] = useState<ApiSettings>(settings);
@@ -282,9 +302,9 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       if (status === "ok") {
         setModelDiscoveryMessage(models.length ? `已获取 ${models.length} 个模型；选择一个填入当前配置。` : "请求成功，但没有解析到模型列表。");
       } else if (status === "approval_required") {
-        setModelDiscoveryMessage(asString(probe.reason, "Gateway 未开启 --execute-provider，或远程探针未授权。"));
+        setModelDiscoveryMessage(providerProbeFailureMessage(probe));
       } else {
-        setModelDiscoveryMessage(asString(probe.reason, asString(probe.text, "模型列表获取失败。")).slice(0, 260));
+        setModelDiscoveryMessage(providerProbeFailureMessage(probe));
       }
     } catch (error) {
       setModelDiscoveryStatus("error");

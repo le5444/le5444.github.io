@@ -1,6 +1,6 @@
 # 织梦写作台 / Zhimeng Writing Agent
 
-> 面向中文长篇小说创作的开源 AI Agent 工作台。它把小说写作流程放进一个可记忆、可审查、可迭代的 Personal Agent OS / Agent IDE。
+> 面向中文长篇小说创作的开源 AI Agent 工作台。它以织梦为公开入口，把小说写作流程放进一个可记忆、可审查、可迭代的 Personal Agent OS / Agent IDE；灵枢 LumenOS 是底层运行层。
 
 [在线体验](https://le5444.github.io/) · [源码分支](https://github.com/le5444/le5444.github.io/tree/source) · [路线图](docs/Personal-OS-Roadmap.md)
 
@@ -12,7 +12,7 @@
 
 当前产品形态分为两层：
 
-- **织梦 Writing Agent**：面向小说创作的专业 Agent 域，负责章节树、富文本写作、提示词/Skills、反崩盘检查、蒸馏、素材和项目知识库。
+- **织梦 Writing Agent**：公开入口和写作主场，负责章节树、富文本写作、提示词/Skills、反崩盘检查、蒸馏、素材和小说项目知识库。
 - **灵枢 LumenOS**：承载织梦的底层 Personal Agent OS，负责多工作区、Agent 线程、记忆、context_pack、Provider、Worker、Gateway、审批队列和受控工具调用。
 
 简单说：**织梦是项目入口和写作主场，LumenOS 是让它变成长期 Agent 工作台的底盘。**

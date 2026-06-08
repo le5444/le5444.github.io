@@ -461,7 +461,7 @@ interface WorkspaceSkillSet {
 
 type DetailTab = "overview" | "memory" | "skills" | "providers" | "workers";
 type WorkbenchView = "agent" | "workspaces" | "memory" | "skills" | "tools" | "providers" | "workers" | "automation" | "writing";
-type BottomPanelTab = "terminal" | "events" | "output" | "problems" | "workers" | "gateway" | "approvals";
+type BottomPanelTab = "terminal" | "events" | "timeline" | "output" | "problems" | "workers" | "gateway" | "approvals";
 type RuntimeLogChannel = "terminal" | "events" | "output" | "problems" | "workers" | "gateway" | "approvals";
 type RuntimeLogStatusFilter = "all" | "issues" | "active";
 type RuntimeLogExportFormat = "jsonl" | "markdown";
@@ -613,6 +613,18 @@ interface RuntimeLogEntry {
   at: number;
 }
 
+interface WorkerTimelineItem {
+  id: string;
+  jobId: string;
+  source: "job" | "event" | "runtime";
+  title: string;
+  detail: string;
+  status: string;
+  at: number;
+  kind: string;
+  ref: string;
+}
+
 interface RuntimeWatchSnapshot {
   enabled: boolean;
   intervalMs: number;
@@ -682,7 +694,7 @@ const WORKBENCH_VIEW_SUBTITLES: Record<WorkbenchView, string> = {
   writing: "Writing Agent",
 };
 const DETAIL_TABS: DetailTab[] = ["overview", "memory", "skills", "providers", "workers"];
-const BOTTOM_PANEL_TABS: BottomPanelTab[] = ["terminal", "events", "output", "problems", "workers", "gateway", "approvals"];
+const BOTTOM_PANEL_TABS: BottomPanelTab[] = ["terminal", "events", "timeline", "output", "problems", "workers", "gateway", "approvals"];
 const RUNTIME_LOG_STATUS_FILTERS: RuntimeLogStatusFilter[] = ["all", "issues", "active"];
 const RUNTIME_LOG_EXPORT_FORMATS: RuntimeLogExportFormat[] = ["jsonl", "markdown"];
 const AGENT_THREAD_SCOPES: AgentThreadScope[] = ["current_workspace", "all_workspaces", "unbound"];
@@ -1329,6 +1341,88 @@ function runtimeLogEntryFromGatewayEvent(value: unknown): RuntimeLogEntry | null
     status: asString(record.status, "recorded"),
     at: Number.isFinite(at) && at > 0 ? at : Date.now(),
   };
+}
+
+function workerTimelineJobId(value: unknown) {
+  const record = asRecord(value);
+  return asString(
+    record.job_id,
+    asString(record.jobId, asString(record.id, asString(record.ref))),
+  );
+}
+
+function workerTimelineTime(value: unknown) {
+  const record = asRecord(value);
+  const raw = record.at || record.updated_at || record.created_at || record.time || record.timestamp;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw > 1_000_000_000_000 ? raw : raw * 1000;
+  const parsed = Date.parse(asString(raw));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : Date.now();
+}
+
+function workerTimelineItemFromJob(job: JsonRecord): WorkerTimelineItem | null {
+  const jobId = workerTimelineJobId(job);
+  if (!jobId) return null;
+  const payload = asRecord(job.payload);
+  const result = asRecord(job.result);
+  const kind = asString(job.kind, asString(payload.kind, "worker_job"));
+  const status = asString(job.status, "unknown");
+  const command = asString(payload.command, asString(payload.action, asString(payload.model_id, asString(payload.kind))));
+  return {
+    id: `job-${jobId}`,
+    jobId,
+    source: "job",
+    title: `${kind} · ${statusLabel(status)}`,
+    detail: asString(job.purpose, asString(result.message, asString(result.reason, command || "Worker job"))),
+    status,
+    at: workerTimelineTime(job),
+    kind,
+    ref: asString(job.proposal_path, asString(job.merge_proposal_path, asString(job.id))),
+  };
+}
+
+function workerTimelineItemFromEvent(event: JsonRecord): WorkerTimelineItem | null {
+  const jobId = workerTimelineJobId(event);
+  if (!jobId) return null;
+  const type = asString(event.type, "worker_event");
+  const status = asString(event.status, "recorded");
+  return {
+    id: `event-${workerEventKey(event)}`,
+    jobId,
+    source: "event",
+    title: `${type} · ${modelWorkerEventLabel(event)}`,
+    detail: asString(event.message, asString(event.text, asString(event.detail, asString(event.stage, "")))),
+    status,
+    at: workerTimelineTime(event),
+    kind: type,
+    ref: asString(event.stage, asString(event.ref)),
+  };
+}
+
+function workerTimelineItemFromRuntime(entry: RuntimeLogEntry): WorkerTimelineItem | null {
+  if (entry.channel !== "workers") return null;
+  const refMatch = entry.detail.match(/ref:\s*([^·\s]+)/);
+  const titleMatch = entry.title.match(/(?:worker|job)[^\w-]*([A-Za-z0-9_.:-]{6,})/i);
+  const jobId = refMatch?.[1] || titleMatch?.[1] || entry.id.replace(/^rt-/, "");
+  return {
+    id: `runtime-${entry.id}`,
+    jobId,
+    source: "runtime",
+    title: entry.title,
+    detail: entry.detail,
+    status: entry.status,
+    at: entry.at,
+    kind: "runtime_event",
+    ref: jobId,
+  };
+}
+
+function dedupeWorkerTimeline(items: WorkerTimelineItem[]) {
+  const map = new Map<string, WorkerTimelineItem>();
+  items.forEach((item) => {
+    const key = [item.source, item.jobId, item.kind, item.status, Math.round(item.at / 1000), item.detail.slice(0, 80)].join("|");
+    if (!map.has(key)) map.set(key, item);
+  });
+  return Array.from(map.values()).sort((a, b) => b.at - a.at);
 }
 
 function loadRuntimeLogs() {
@@ -5119,6 +5213,27 @@ export function AgentControlCenter({
   const providerActionWorkerPayload = asRecord(providerActionResult.model_worker_payload);
   const providerActionEnv = asRecord(providerActionResult.env);
   const providerActionModels = providerModelListFromProbe(providerActionResult);
+  const providerActionStatusCode = asNumber(providerActionResult.status_code);
+  const providerActionProbeSummary = providerAction.action === "provider_probe"
+    ? (() => {
+      const status = asString(providerActionResult.status);
+      const reason = asString(providerActionResult.reason);
+      if (status === "ok") {
+        return providerActionModels.length
+          ? `已从 /models 解析 ${providerActionModels.length} 个模型；点击模型只会填入草案，不调用模型生成。`
+          : "探针请求成功，但没有解析到模型列表；可能是该 Provider 返回格式不是 OpenAI-compatible data/models。";
+      }
+      if (status === "approval_required") return reason || "Provider 探针需要 Gateway --execute-provider、payload.execute=true；远程端点还需要 allow_remote_model=true。";
+      if (status === "http_error") {
+        if (providerActionStatusCode === 401) return "端点已到达，但 API key 缺失或格式不被接受。请确认密钥已填写，并使用 Bearer / x-api-key 兼容的 Provider。";
+        if (providerActionStatusCode === 403) return "端点已到达，但服务端拒绝当前 API key。常见原因是 key 权限、额度、模型白名单或账号绑定不匹配。";
+        if (providerActionStatusCode === 404 || providerActionStatusCode === 405) return "端点已到达，但 `/models` 路径不可用。请确认 base URL 是否应填到 `/v1`，或该 Provider 是否支持模型列表接口。";
+        return `端点返回 HTTP ${providerActionStatusCode || "错误"}${reason ? `：${reason}` : ""}`;
+      }
+      if (status === "network_error") return reason ? `网络连接失败：${reason}` : "网络连接失败，请检查 base URL、代理、防火墙或 TLS 证书。";
+      return reason || "等待 Provider 探针结果。";
+    })()
+    : "";
   const applyProviderActionModelToDraft = (modelId: string) => {
     if (!modelId) return;
     setProviderConfigDraft((prev) => ({
@@ -7231,7 +7346,7 @@ export function AgentControlCenter({
     {
       label: "目标锁定",
       status: "completed",
-      detail: "织梦是写作入口和主场；灵枢 LumenOS 是支撑它长期运行的 Agent OS 底层。",
+      detail: "织梦是公开写作入口和主场；灵枢 LumenOS 提供 Personal Agent OS 底层。",
     },
     {
       label: "上下文装载",
@@ -7519,7 +7634,7 @@ export function AgentControlCenter({
       "## 阻断条件",
       "- 不允许绕过 Gateway approval queue。",
       "- 不允许从泄露源码复制实现。",
-      "- 不允许把 Writing Agent 重新抬成产品外壳。",
+      "- 不允许把公开入口从织梦写作台改成泛化 OS 门牌。",
       "",
     ].join("\n");
     const steering = [
@@ -8994,6 +9109,25 @@ export function AgentControlCenter({
     .filter((entry) => runtimeLogMatchesText(entry, workbenchLayout.runtimeLogFilter))
     .filter((entry) => runtimeLogMatchesStatus(entry, workbenchLayout.runtimeLogStatusFilter))
     .slice(0, 24);
+  const workerTimelineRows = dedupeWorkerTimeline([
+    ...workerRecentJobs.map((job) => workerTimelineItemFromJob(job)).filter((item): item is WorkerTimelineItem => Boolean(item)),
+    ...workerRecentEvents.map((event) => workerTimelineItemFromEvent(event)).filter((item): item is WorkerTimelineItem => Boolean(item)),
+    ...runtimeEventRows.map((entry) => workerTimelineItemFromRuntime(entry)).filter((item): item is WorkerTimelineItem => Boolean(item)),
+  ])
+    .filter((entry) => {
+      const normalized = workbenchLayout.runtimeLogFilter.trim().toLowerCase();
+      if (!normalized) return true;
+      return [entry.jobId, entry.source, entry.title, entry.detail, entry.status, entry.kind, entry.ref, formatDateTime(entry.at)].join("\n").toLowerCase().includes(normalized);
+    })
+    .filter((entry) => {
+      if (workbenchLayout.runtimeLogStatusFilter === "issues") return ISSUE_LOG_STATUSES.has(entry.status);
+      if (workbenchLayout.runtimeLogStatusFilter === "active") return ACTIVE_LOG_STATUSES.has(entry.status);
+      return true;
+    })
+    .slice(0, 40);
+  const workerTimelineActiveCount = workerTimelineRows.filter((item) => ACTIVE_LOG_STATUSES.has(item.status)).length;
+  const workerTimelineIssueCount = workerTimelineRows.filter((item) => ISSUE_LOG_STATUSES.has(item.status)).length;
+  const workerTimelineJobCount = new Set(workerTimelineRows.map((item) => item.jobId).filter(Boolean)).size;
   const outputLogRows = runtimeLogRows.filter((entry) => entry.channel === "output").slice(0, 12);
   const workerLogRows = runtimeLogRows.filter((entry) => entry.channel === "workers").slice(0, 12);
   const gatewayLogRows = runtimeLogRows.filter((entry) => entry.channel === "gateway").slice(0, 12);
@@ -9023,18 +9157,28 @@ export function AgentControlCenter({
     ? outputLogRows
     : bottomPanelTab === "events"
       ? runtimeEventRows
-    : bottomPanelTab === "workers"
-      ? workerLogRows
-      : bottomPanelTab === "gateway"
-        ? gatewayLogRows
-        : bottomPanelTab === "approvals"
-          ? approvalLogRows
-          : bottomPanelTab === "problems"
-            ? problemLogRows
-            : terminalLogRows;
+      : bottomPanelTab === "timeline"
+        ? workerTimelineRows.map((item): RuntimeLogEntry => ({
+          id: item.id,
+          channel: "workers",
+          title: item.title,
+          detail: `${item.jobId} · ${item.detail}`,
+          status: item.status,
+          at: item.at,
+        }))
+        : bottomPanelTab === "workers"
+          ? workerLogRows
+          : bottomPanelTab === "gateway"
+            ? gatewayLogRows
+            : bottomPanelTab === "approvals"
+              ? approvalLogRows
+              : bottomPanelTab === "problems"
+                ? problemLogRows
+                : terminalLogRows;
   const bottomPanelTabs = [
     { id: "terminal" as const, label: "终端", meta: `${terminalLogRows.length}` },
     { id: "events" as const, label: "事件流", meta: `${runtimeEventRows.length || asNumber(runtimeEventPayload.count)}` },
+    { id: "timeline" as const, label: "时间线", meta: `${workerTimelineJobCount}/${workerTimelineRows.length}` },
     { id: "output" as const, label: "输出", meta: `${outputLogRows.length}` },
     { id: "problems" as const, label: "问题", meta: `${completionPartial + completionMissing + problemLogRows.length}` },
     { id: "workers" as const, label: "Worker", meta: `${workerCount}/${workerLogRows.length}` },
@@ -9801,6 +9945,52 @@ export function AgentControlCenter({
                   </div>
                 )) : <EmptyBlock text={state.runtime ? "当前筛选下没有 Gateway runtime event" : "刷新 Gateway 后会读取 runs / approvals / workers 统一事件流"} />}
               </div>
+            </div>
+          </div>
+        )}
+        {bottomPanelTab === "timeline" && (
+          <div className="grid gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-1">
+              <MiniStat label="任务数" value={`${workerTimelineJobCount}`} tone={workerTimelineJobCount ? "text-cyan-300" : "text-slate-300"} />
+              <MiniStat label="时间线事件" value={`${workerTimelineRows.length}`} />
+              <MiniStat label="活跃" value={`${workerTimelineActiveCount}`} tone={workerTimelineActiveCount ? "text-amber-300" : "text-slate-300"} />
+              <MiniStat label="问题" value={`${workerTimelineIssueCount}`} tone={workerTimelineIssueCount ? "text-red-300" : "text-emerald-300"} />
+              <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <Timer className="h-4 w-4 text-cyan-300" />
+                  <span className="text-xs font-medium text-slate-200">Worker 任务时间线</span>
+                </div>
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  合并 worker_status、模型 Worker 事件和 Gateway runtime_events；只读展示，不执行命令、不调用模型、不批准审批。
+                </p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {["job", "event", "runtime"].map((source) => (
+                    <span key={source} className="rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-400">{source}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="grid max-h-72 gap-2 overflow-auto pr-1">
+              {workerTimelineRows.length ? workerTimelineRows.map((item) => (
+                <div key={item.id} className="grid gap-2 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-3 md:grid-cols-[112px_minmax(0,1fr)_auto]">
+                  <div className="min-w-0">
+                    <div className="text-[10px] text-slate-600">{formatTime(item.at)}</div>
+                    <div className="mt-1 truncate font-mono text-[10px] text-cyan-300" title={item.jobId}>{truncateMiddle(item.jobId, 18)}</div>
+                    <div className="mt-1 inline-flex rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-500">{item.source}</div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate text-xs font-semibold text-slate-100">{item.title}</span>
+                      <span className="rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-500">{item.kind}</span>
+                    </div>
+                    <div className="mt-2 line-clamp-3 text-[10px] leading-relaxed text-slate-500">{item.detail || item.ref || "无详情"}</div>
+                    {item.ref && <div className="mt-1 truncate font-mono text-[10px] text-slate-600">{item.ref}</div>}
+                  </div>
+                  <div className="flex items-start justify-end">
+                    <StatusBadge status={item.status} subtle />
+                  </div>
+                </div>
+              )) : <EmptyBlock text={state.worker || state.runtime ? "当前筛选下没有 Worker 时间线事件" : "刷新 Gateway 后会从 worker_status / runtime_events 生成任务时间线"} />}
             </div>
           </div>
         )}
@@ -12393,6 +12583,17 @@ export function AgentControlCenter({
                     </div>
                   </div>
                 )}
+                {providerActionProbeSummary && (
+                  <div className={`rounded-lg border px-3 py-2 text-[10px] leading-relaxed ${
+                    providerAction.status === "ok"
+                      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+                      : providerAction.status === "approval_required"
+                        ? "border-amber-500/20 bg-amber-500/10 text-amber-200"
+                        : "border-red-500/20 bg-red-500/10 text-red-200"
+                  }`}>
+                    {providerActionProbeSummary}
+                  </div>
+                )}
                 {providerActionModels.length > 0 && (
                   <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3">
                     <SectionTitle icon={<ListChecks className="h-4 w-4 text-lime-300" />} title="模型列表" meta={`${providerActionModels.length} 个`} />
@@ -13082,8 +13283,8 @@ export function AgentControlCenter({
             <Activity className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-white">灵枢 LumenOS</div>
-            <div className="truncate text-[10px] text-slate-500">Personal Agent OS · 织梦是内置写作 Agent</div>
+            <div className="truncate text-sm font-semibold text-white">织梦写作台</div>
+            <div className="truncate text-[10px] text-slate-500">Writing Agent · LumenOS 底层</div>
           </div>
         </div>
         <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 lg:flex">
