@@ -22,6 +22,7 @@ export interface ApiSettings {
   maxTokens?: number;
   profiles?: ApiProfile[];
   activeProfileId?: string;
+  modelDiscoveryHistory?: ModelDiscoveryHistoryEntry[];
   // 反崩盘默认开关（在设置面板暴露）
   antiCollapseDefault?: boolean;
   voiceLockDefault?: boolean;
@@ -40,6 +41,26 @@ export interface ApiProfile {
   maxTokens?: number;
 }
 
+export interface ModelDiscoveryHistoryEntry {
+  id: string;
+  apiUrl: string;
+  provider?: ProviderId;
+  status: string;
+  statusCode?: number;
+  message: string;
+  modelCount: number;
+  models: Array<{
+    id: string;
+    displayName: string;
+    ownedBy?: string;
+    type?: string;
+    created?: number;
+    tags?: string[];
+  }>;
+  keyPresent: boolean;
+  createdAt: number;
+}
+
 const STORAGE_KEY = "novelsmith-api-settings";
 
 const defaultSettings: ApiSettings = {
@@ -52,6 +73,7 @@ const defaultSettings: ApiSettings = {
   maxTokens: undefined,
   profiles: [],
   activeProfileId: undefined,
+  modelDiscoveryHistory: [],
   antiCollapseDefault: true,
   voiceLockDefault: true,
   chroniclerAuto: false,

@@ -1,6 +1,6 @@
-# Zhimeng Personal OS Bridge
+# LumenOS Agent Gateway
 
-Local Gateway prototype for the Personal OS layer.
+Local Gateway prototype for the LumenOS Personal Agent OS layer. Zhimeng/织梦 is the built-in Writing Agent domain, not the top-level product shell.
 
 Coordinator mode:
 
@@ -68,7 +68,7 @@ Current behavior:
 - Verifies Phase 4 swarm safety through `swarm_bootstrap`, registering forked/isolated agents, exercising same-scope write-lock conflict, running allowlisted workers, and proving command validators block dangerous drafts.
 - Verifies Phase 5 evolution through `evolution_bootstrap`, connecting KAIROS task/tick, append-only daily log, scheduler drafts, AutoDream L1/L2 consolidation, reviewed Skill activation, and Honcho-lite reflection.
 - Provides `phase_audit` to report Phase 1-5 Personal OS evidence and known gaps.
-- Provides `completion_audit` to map public Codex / Claude Code / WorkBuddy / OpenClaw / Hermes-style agent capabilities onto Zhimeng Personal OS requirements, marking each as proven, partial, missing, or approval-blocked.
+- Provides `completion_audit` to map public Codex / Claude Code / WorkBuddy / OpenClaw / Hermes-style agent capabilities onto LumenOS Personal Agent OS requirements, marking each as proven, partial, missing, or approval-blocked.
 - Keeps browser-origin requests in dry-run mode by default.
 - Allows safe `read_file` only when `--execute` is passed in CLI mode, or when the Gateway is started with `--execute-read` and the request also sets `"execute": true`.
 - Allows workspace `write_file` only when `--execute-write` is enabled and the request also sets `"execute": true`; direct writes create backup/diff audit metadata.
@@ -289,7 +289,7 @@ python bridge/zhimeng_bridge.py --json '{ "action": "source_digest", "purpose": 
 Goal bootstrap example:
 
 ```powershell
-python bridge/zhimeng_bridge.py --json '{ "action": "goal_bootstrap", "purpose": "bootstrap Personal OS", "payload": { "goal": "把织梦写作台升级为 Personal OS", "persist": true, "spawn_subagents": true, "start_workers": true, "kairos": true } }'
+python bridge/zhimeng_bridge.py --json '{ "action": "goal_bootstrap", "purpose": "bootstrap Personal OS", "payload": { "goal": "建设灵枢 LumenOS Personal Agent OS；织梦作为内置 Writing Agent", "persist": true, "spawn_subagents": true, "start_workers": true, "kairos": true } }'
 ```
 
 `goal_bootstrap` turns the safe public agent architecture digest into a Goal Mode planner tree. It creates Phase 1-5 tasks, a detailed Phase 1 subtask tree, verification gates, bounded subagent specs, safe internal worker job plans, source-boundary rules, and next bridge requests. When `persist=true`, it registers a workflow DAG, optional subagent branches, a KAIROS long-running task record, and a compact bootstrap state file. When `start_workers=true`, it starts only allowlisted internal Gateway worker actions such as `source_digest`, `context_pack`, `safety_review`, `sandbox_status`, and `phase_audit`; it still does not fetch external sources, inspect leaked code, execute arbitrary shell commands, or execute model workers.
@@ -329,7 +329,7 @@ python bridge/zhimeng_bridge.py --json '{ "action": "swarm_bootstrap", "purpose"
 Evolution bootstrap example:
 
 ```powershell
-python bridge/zhimeng_bridge.py --json '{ "action": "evolution_bootstrap", "purpose": "verify Phase 5 evolution", "payload": { "objective": "把织梦写作台升级为 Personal OS", "interval_minutes": 5, "activate_skill": true, "persist": true } }'
+python bridge/zhimeng_bridge.py --json '{ "action": "evolution_bootstrap", "purpose": "verify Phase 5 evolution", "payload": { "objective": "建设灵枢 LumenOS Personal Agent OS；织梦作为内置 Writing Agent", "interval_minutes": 5, "activate_skill": true, "persist": true } }'
 ```
 
 `evolution_bootstrap` is the Phase 5 acceptance gate. It registers a KAIROS task, runs an observation tick, appends the daily log, creates reviewed scheduler install/uninstall drafts, seeds and consolidates AutoDream memory, crystallizes a reusable Skill draft, activates the reviewed copy into `bridge/skills/activated/*.py`, and reflects an evidence-backed user-model belief. It does not install OS scheduled tasks, import/execute activated Skills, or perform external actions.
@@ -654,7 +654,7 @@ Phase 2 memory bootstrap:
   "action": "memory_bootstrap",
   "purpose": "Verify AutoDream L1/L2 memory",
   "payload": {
-    "goal": "把织梦写作台升级为 Personal OS",
+    "goal": "建设灵枢 LumenOS Personal Agent OS；织梦作为内置 Writing Agent",
     "query": "Personal OS 长期记忆",
     "limit": 6
   }

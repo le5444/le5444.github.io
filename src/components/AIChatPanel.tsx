@@ -1449,7 +1449,7 @@ export function AIChatPanel({
       action: "evolution_bootstrap",
       purpose: "验收 Phase 5 Evolution：KAIROS、scheduler 草案、AutoDream、Skill 结晶和用户模型",
       payload: {
-        objective: input || currentPlainText.slice(-600) || "把织梦写作台升级为 Personal OS：长期自治、记忆压缩、技能进化和安全写回。",
+        objective: input || currentPlainText.slice(-600) || "继续建设灵枢 LumenOS Personal Agent OS：长期自治、记忆压缩、技能进化和安全写回；织梦作为内置写作域。",
         workflow_id: `workflow-evolution-${workflowDagPreview.id}`,
         interval_minutes: 5,
         activate_skill: true,
@@ -1610,7 +1610,7 @@ export function AIChatPanel({
           }
         : action === "memory_bootstrap"
           ? {
-              goal: input || "把织梦写作台升级为 Personal OS：长期记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 自治。",
+              goal: input || "继续建设灵枢 LumenOS Personal Agent OS：长期记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 自治；织梦作为内置写作域。",
               query: input || "Personal OS 长期记忆",
               limit: 6,
             }
@@ -1941,7 +1941,7 @@ export function AIChatPanel({
       purpose: "把安全来源提炼成 Personal OS 架构吸收蓝图",
       payload: {
         persist: true,
-        goal: "把 Codex / Claude Code / WorkBuddy / OpenClaw / Hermes 的公开架构模式融合进织梦 Personal OS。",
+        goal: "把 Codex / Claude Code / WorkBuddy / OpenClaw / Hermes 的公开架构模式融合进灵枢 LumenOS Personal Agent OS。",
         sources: [
           { label: "OpenAI Codex 官方文档", url: "https://developers.openai.com/codex/", source_kind: "official" },
           { label: "Anthropic Claude Code 官方文档", url: "https://code.claude.com/docs/", source_kind: "official" },
@@ -1959,7 +1959,7 @@ export function AIChatPanel({
   };
 
   const createGoalBootstrapBridgeRequest = () => {
-    const goal = input.trim() || "把织梦写作台升级为长期写作 Agent 工作台：以小说创作为主场，复用 LumenOS 的上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治。";
+    const goal = input.trim() || "继续建设灵枢 LumenOS Personal Agent OS：以多工作区、上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治为顶层能力，织梦作为内置写作 Agent。";
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "goal_bootstrap",

@@ -1,6 +1,6 @@
-# Zhimeng Rust Core Wrapper
+# LumenOS Rust Core Wrapper
 
-Minimal Rust wrapper for the Zhimeng Personal OS Python Gateway.
+Minimal Rust wrapper for the LumenOS Personal Agent OS Python Gateway.
 
 The wrapper does not replace the Python Gateway yet. It provides a small, auditable
 entrypoint for future Rust/Python hybrid work:

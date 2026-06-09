@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Zhimeng Personal OS local executor bridge.
+LumenOS Personal Agent OS local executor gateway.
 
 This bridge is intentionally conservative:
 - Default mode is dry-run.
@@ -37,7 +37,7 @@ from typing import Any, Dict, List
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 
-BRIDGE_NAME = "Zhimeng Personal OS Bridge"
+BRIDGE_NAME = "LumenOS Agent Gateway"
 PROTOCOL_VERSION = "0.2"
 TEXT_EXTENSIONS = {".md", ".txt", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".html", ".css"}
 SKIP_DIRS = {"node_modules", "dist", "dist-pwa", ".git", ".vite", "__pycache__"}
@@ -1019,7 +1019,7 @@ def normalize_web_headers(payload: Dict[str, Any]) -> Dict[str, str]:
             continue
         headers[clean_key] = clean_value
     if not any(key.lower() == "user-agent" for key in headers):
-        headers["User-Agent"] = "Zhimeng-PersonalOS-Gateway/0.2"
+        headers["User-Agent"] = "LumenOS-Agent-Gateway/0.2"
     return headers
 
 
@@ -3136,14 +3136,14 @@ def create_scheduler_plan(payload: Dict[str, Any], purpose: str) -> Dict[str, An
     run_command = f'"{launcher_path}"'
     install_body = "\n".join([
         "@echo off",
-        "REM Review before running. This draft registers a Windows Scheduled Task for Zhimeng Personal OS.",
+        "REM Review before running. This draft registers a Windows Scheduled Task for LumenOS Personal Agent OS.",
         f'schtasks /Create /TN "{task_name}" /SC MINUTE /MO {interval_minutes} /TR {run_command} /F',
         "pause",
         "",
     ])
     uninstall_body = "\n".join([
         "@echo off",
-        "REM Review before running. This draft removes the Zhimeng Personal OS Scheduled Task.",
+        "REM Review before running. This draft removes the LumenOS Personal Agent OS Scheduled Task.",
         f'schtasks /Delete /TN "{task_name}" /F',
         "pause",
         "",
@@ -4693,7 +4693,7 @@ def digest_sources(payload: Dict[str, Any], purpose: str) -> Dict[str, Any]:
     digest = {
         "id": str(payload.get("digest_id") or payload.get("id") or f"digest-{uuid.uuid4()}"),
         "created_at": now_iso(),
-        "goal": str(payload.get("goal") or purpose or "Build Zhimeng Personal OS from public agent architecture patterns."),
+        "goal": str(payload.get("goal") or purpose or "Build LumenOS Personal Agent OS from public agent architecture patterns."),
         "execution": "audit-first-no-fetch-no-clone-no-leak-inspection",
         "audit_summary": audit.get("summary", {}),
         "safe_source_count": len(safe_sources),
@@ -4846,7 +4846,7 @@ def goal_subagent_specs(goal_id: str) -> List[Dict[str, Any]]:
             "label": "小说领域代理",
             "mode": "forked-context",
             "allowed_tools": ["skill_route", "skill_invoke", "context_pack", "memory_retrieve"],
-            "mission": "在 Personal OS 下挂载织梦写作台和小说 Skills，处理开书、设定、正文、审稿和回灌。",
+            "mission": "在 LumenOS Personal Agent OS 下挂载织梦 Writing Agent 和小说 Skills，处理开书、设定、正文、审稿和回灌。",
         },
     ]
 
@@ -5048,7 +5048,7 @@ def phase1_worker_plan(goal_id: str, objective: str) -> List[Dict[str, Any]]:
 
 
 def bootstrap_goal(payload: Dict[str, Any], purpose: str) -> Dict[str, Any]:
-    objective = str(payload.get("goal") or payload.get("objective") or purpose or "Build Zhimeng Personal OS as a super-agent.").strip()
+    objective = str(payload.get("goal") or payload.get("objective") or purpose or "Build LumenOS Personal Agent OS as a super-agent.").strip()
     goal_id = str(payload.get("goal_id") or payload.get("id") or f"goal-{uuid.uuid4().hex[:8]}").strip()
     workflow_id = str(payload.get("workflow_id") or f"workflow-{goal_id}").strip()
     persist = payload.get("persist") is not False
@@ -6001,7 +6001,7 @@ def user_model_reflect(payload: Dict[str, Any], purpose: str) -> Dict[str, Any]:
 
 
 def bootstrap_evolution(payload: Dict[str, Any], purpose: str) -> Dict[str, Any]:
-    objective = str(payload.get("objective") or payload.get("goal") or "Verify KAIROS evolution loop for Zhimeng Personal OS.").strip()
+    objective = str(payload.get("objective") or payload.get("goal") or "Verify KAIROS evolution loop for LumenOS Personal Agent OS.").strip()
     evolution_id = str(payload.get("evolution_id") or payload.get("id") or f"evolution-{uuid.uuid4().hex[:8]}").strip()
     workflow_id = str(payload.get("workflow_id") or f"workflow-{evolution_id}").strip()
     task_id = str(payload.get("task_id") or f"kairos-{evolution_id}").strip()
@@ -6505,7 +6505,7 @@ def completion_audit() -> Dict[str, Any]:
         ),
         req(
             "writing_agent_domain",
-            "织梦写作台作为领域 Agent",
+            "织梦 Writing Agent 作为内置领域 Agent",
             ["Codex Skills", "Claude Code Skills"],
             [
                 {"ok": file_contains("src/store/workspace.ts", ["小说", "写作", "BRIDGE.md"]), "item": "Default workspace keeps writing-domain project files.", "source": "src/store/workspace.ts"},
@@ -7383,7 +7383,7 @@ def provider_probe(payload: Dict[str, Any], purpose: str, execute_provider: bool
         url = normalize_api_url(api_url, "/models")
         body = None
         request_method = "GET"
-    headers = {"User-Agent": "Zhimeng-PersonalOS-Gateway/0.2"}
+    headers = {"User-Agent": "LumenOS-Agent-Gateway/0.2"}
     if provider == "anthropic" and api_key:
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = "2023-06-01"
@@ -7494,7 +7494,7 @@ def prepare_model_worker_task(payload: Dict[str, Any], purpose: str) -> Dict[str
     }
     context = build_context_pack(context_payload, purpose or "model worker context")
     system_prompt = str(payload.get("system_prompt") or "").strip() or "\n".join([
-        "You are a bounded Zhimeng Personal OS worker agent.",
+        "You are a bounded LumenOS Personal Agent OS worker.",
         "Use only the compact context supplied here. Do not claim external tools ran unless the context says so.",
         "Return: result, evidence, risks, and next_actions. Do not write files or run commands.",
     ])
@@ -9036,7 +9036,7 @@ def mcp_resource_specs() -> List[Dict[str, str]]:
     return [
         {
             "uri": "zhimeng://manifest",
-            "name": "Zhimeng Personal OS Manifest",
+            "name": "LumenOS Agent Gateway Manifest",
             "description": "Bridge manifest, tool registry, safety policy, and local endpoint hints.",
             "mimeType": "application/json",
         },

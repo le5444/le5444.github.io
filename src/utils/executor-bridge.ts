@@ -8,7 +8,7 @@ export type ExecutorActionKind = "search" | "run" | "advance" | "status" | "appr
 export type ExecutorBridgeRequestStatus = "draft" | "submitted" | "completed" | "blocked" | "rejected";
 
 export interface ExecutorBridgeManifest {
-  name: "Zhimeng Personal OS Bridge";
+  name: "LumenOS Agent Gateway";
   mode: ExecutorBridgeMode;
   protocolVersion: "0.2";
   endpointHint: string;
@@ -31,7 +31,7 @@ export interface ExecutorBridgeRequest {
 }
 
 export const DEFAULT_EXECUTOR_BRIDGE: ExecutorBridgeManifest = {
-  name: "Zhimeng Personal OS Bridge",
+  name: "LumenOS Agent Gateway",
   mode: "dry-run",
   protocolVersion: "0.2",
   endpointHint: "http://127.0.0.1:8765/bridge",

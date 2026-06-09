@@ -16,6 +16,7 @@ __pycache__/
 target/
 
 # Local runtime state and generated records
+.codex-runtime/
 bridge/approvals/
 bridge/goals/
 bridge/healthcheck-write/

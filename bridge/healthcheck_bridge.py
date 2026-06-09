@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Healthcheck for the Zhimeng Personal OS Gateway.
+Healthcheck for the LumenOS Agent Gateway.
 
 Default mode imports zhimeng_bridge.py directly and exercises the same handlers
 used by HTTP/MCP. Pass --url http://127.0.0.1:8765 to check a running Gateway.
@@ -338,7 +338,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
     def goal_bootstrap() -> Dict[str, Any]:
         result = direct_bridge_request("goal_bootstrap", {
             "goal_id": f"goal-{marker}",
-            "goal": "Build Zhimeng Personal OS from safe public agent architecture patterns.",
+            "goal": "Build LumenOS Personal Agent OS from safe public agent architecture patterns.",
             "persist": True,
             "spawn_subagents": True,
             "start_workers": True,
@@ -562,7 +562,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
             fetch = executed.get("web_fetch", {})
             assert_true(executed.get("status") == "ok", "web_fetch should execute when execute_web and execute=true are set")
             assert_true(fetch.get("status_code") == 200, "web_fetch local health should return HTTP 200")
-            assert_true("Zhimeng Personal OS Bridge" in fetch.get("text", ""), "web_fetch should return bounded response text")
+            assert_true("LumenOS Agent Gateway" in fetch.get("text", ""), "web_fetch should return bounded response text")
             return {"dry_status": dry.get("status"), "executed_status": executed.get("status"), "status_code": fetch.get("status_code"), "truncated": fetch.get("truncated")}
         finally:
             httpd.shutdown()

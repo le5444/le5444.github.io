@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Line-delimited JSON-RPC stdio facade for Zhimeng Personal OS Bridge.
+Line-delimited JSON-RPC stdio facade for LumenOS Agent Gateway.
 
 This is intentionally small: each input line is one JSON-RPC request and each
 output line is one JSON-RPC response. It reuses zhimeng_bridge.handle_mcp_rpc

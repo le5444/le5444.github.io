@@ -165,7 +165,7 @@ function routeSubagents(domain: PersonalOSDomain, risk: PersonalOSRisk): Persona
   ];
   if (domain === "writing") {
     routes.push(
-      { key: "novel_orchestrator", label: "小说编排", mode: "forked-context", purpose: "调度四套小说 Skills 和织梦写作台文件" },
+      { key: "novel_orchestrator", label: "小说编排", mode: "forked-context", purpose: "调度四套小说 Skills 和织梦 Writing Agent 工作区" },
       { key: "continuity_reviewer", label: "连续性审稿", mode: "isolated-context", purpose: "只检查矛盾、断线和越界" },
     );
   }

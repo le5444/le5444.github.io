@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { CheckCircle2, Eye, EyeOff, ListChecks, Loader2, Pencil, RotateCcw, Search, Settings, Sparkles, Trash2, Upload, X, Zap } from "lucide-react";
-import { type ApiSettings, PROVIDER_LABELS, PROVIDER_PRESETS, allowsEmptyApiKey, inferProvider, type ProviderId } from "../store/settings";
+import { type ApiSettings, type ModelDiscoveryHistoryEntry, PROVIDER_LABELS, PROVIDER_PRESETS, allowsEmptyApiKey, inferProvider, type ProviderId } from "../store/settings";
 import { type BookProject } from "../store/library";
 import { type PromptTemplate, type WorkspaceFile } from "../store/workspace";
 import { type DistilledProfile } from "../store/distillation";
@@ -29,7 +29,23 @@ interface ModelDiscoveryItem {
   ownedBy: string;
   type: string;
   created: number;
+  tags: string[];
 }
+
+const MODEL_DISCOVERY_HISTORY_LIMIT = 12;
+
+const modelDiscoveryTagOptions = [
+  { id: "all", label: "全部" },
+  { id: "coding", label: "编码" },
+  { id: "reasoning", label: "推理" },
+  { id: "long-context", label: "长上下文" },
+  { id: "multimodal", label: "多模态" },
+  { id: "fast", label: "低延迟" },
+  { id: "local", label: "本地" },
+  { id: "router", label: "聚合" },
+] as const;
+
+type ModelDiscoveryTagFilter = (typeof modelDiscoveryTagOptions)[number]["id"];
 
 const GATEWAY_BRIDGE_URL = "http://127.0.0.1:8765/bridge";
 
@@ -79,6 +95,33 @@ function asNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function formatModelDiscoveryTime(value: number) {
+  if (!value) return "未知时间";
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value));
+  } catch {
+    return new Date(value).toLocaleString();
+  }
+}
+
+function inferModelTags(model: Pick<ModelDiscoveryItem, "id" | "displayName" | "ownedBy">): string[] {
+  const text = `${model.id} ${model.displayName} ${model.ownedBy}`.toLowerCase();
+  const tags = new Set<string>();
+  if (/(codex|code|coder|devin|deepseek-coder|qwen.*coder|claude.*sonnet|gpt-5|gpt-4\.1)/.test(text)) tags.add("coding");
+  if (/(reason|thinking|r1|o1|o3|deepseek-r|qwq|gpt-5|opus)/.test(text)) tags.add("reasoning");
+  if (/(128k|200k|1m|long|context|gemini-1\.5|moonshot|kimi|claude|gpt-4\.1|gpt-5)/.test(text)) tags.add("long-context");
+  if (/(vision|vl|omni|multimodal|image|gpt-4o|gemini)/.test(text)) tags.add("multimodal");
+  if (/(flash|mini|turbo|haiku|groq|cerebras|fast|speed)/.test(text)) tags.add("fast");
+  if (/(local|ollama|lm studio|llama\.cpp|vllm|127\.0\.0\.1|localhost)/.test(text)) tags.add("local");
+  if (/(router|openrouter|codex2api|one api|new api|litellm)/.test(text)) tags.add("router");
+  return Array.from(tags);
+}
+
 function providerModelsFromGatewayResult(result: unknown): ModelDiscoveryItem[] {
   const data = asRecord(result);
   const probe = asRecord(data.provider_probe || data);
@@ -94,6 +137,11 @@ function providerModelsFromGatewayResult(result: unknown): ModelDiscoveryItem[] 
         ownedBy: asString(item.owned_by, asString(item.owner, asString(item.provider, "provider"))),
         type: asString(item.type, asString(item.object, "model")),
         created: asNumber(item.created),
+        tags: inferModelTags({
+          id,
+          displayName: displayName || id,
+          ownedBy: asString(item.owned_by, asString(item.owner, asString(item.provider, "provider"))),
+        }),
       };
     })
     .filter((item) => item.id);
@@ -128,6 +176,8 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   const [modelDiscoveryStatus, setModelDiscoveryStatus] = useState<ModelDiscoveryStatus>("idle");
   const [modelDiscoveryMessage, setModelDiscoveryMessage] = useState("");
   const [modelDiscoveryItems, setModelDiscoveryItems] = useState<ModelDiscoveryItem[]>([]);
+  const [modelDiscoverySearch, setModelDiscoverySearch] = useState("");
+  const [modelDiscoveryTag, setModelDiscoveryTag] = useState<ModelDiscoveryTagFilter>("all");
   useEffect(() => { if (open) setForm(settings); }, [open, settings]);
   useEffect(() => { if (open) { setPresetSearch(""); setPresetGroup("all"); } }, [open]);
   useEffect(() => {
@@ -135,6 +185,8 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
     setModelDiscoveryStatus("idle");
     setModelDiscoveryMessage("");
     setModelDiscoveryItems([]);
+    setModelDiscoverySearch("");
+    setModelDiscoveryTag("all");
   }, [open, form.apiKey, form.apiUrl, form.provider]);
   const filteredPresets = useMemo(() => {
     const q = presetSearch.trim().toLowerCase();
@@ -160,6 +212,14 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       && preset.modelId === form.modelId
     ))?.id;
   }, [form.apiUrl, form.modelId, form.provider]);
+  const filteredModelDiscoveryItems = useMemo(() => {
+    const q = modelDiscoverySearch.trim().toLowerCase();
+    return modelDiscoveryItems.filter((model) => {
+      if (modelDiscoveryTag !== "all" && !model.tags.includes(modelDiscoveryTag)) return false;
+      if (!q) return true;
+      return [model.id, model.displayName, model.ownedBy, model.type, ...model.tags].join(" ").toLowerCase().includes(q);
+    });
+  }, [modelDiscoveryItems, modelDiscoverySearch, modelDiscoveryTag]);
   if (!open) return null;
   const effectiveProvider: ProviderId = form.provider || inferProvider(form.apiUrl);
   const keyOptional = allowsEmptyApiKey(form.apiUrl, effectiveProvider);
@@ -178,6 +238,51 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   const profiles = form.profiles || [];
   const modelDiscoveryNeedsRemoteAllow = !isLocalEndpoint(form.apiUrl);
   const canDiscoverModels = Boolean(form.apiUrl.trim()) && (keyOptional || Boolean(form.apiKey.trim())) && modelDiscoveryStatus !== "running";
+  const modelDiscoveryHistory = form.modelDiscoveryHistory || [];
+  const recordModelDiscovery = (entry: Omit<ModelDiscoveryHistoryEntry, "id" | "createdAt">) => {
+    const apiUrl = entry.apiUrl.trim();
+    if (!apiUrl) return;
+    const nextEntry: ModelDiscoveryHistoryEntry = {
+      ...entry,
+      id: `model-discovery-${Date.now()}`,
+      createdAt: Date.now(),
+      models: entry.models.slice(0, 80),
+    };
+    setForm((prev) => ({
+      ...prev,
+      modelDiscoveryHistory: [
+        nextEntry,
+        ...(prev.modelDiscoveryHistory || []).filter((item) => item.apiUrl !== apiUrl || item.provider !== entry.provider),
+      ].slice(0, MODEL_DISCOVERY_HISTORY_LIMIT),
+    }));
+  };
+  const replayDiscoveryHistory = (entry: ModelDiscoveryHistoryEntry) => {
+    setForm((prev) => ({
+      ...prev,
+      apiUrl: entry.apiUrl,
+      provider: entry.provider || inferProvider(entry.apiUrl),
+      modelId: entry.models[0]?.id || prev.modelId,
+      modelName: entry.models[0]?.displayName || prev.modelName,
+    }));
+    setModelDiscoveryStatus(entry.status as ModelDiscoveryStatus);
+    setModelDiscoveryMessage(`已载入 ${formatPresetHost(entry.apiUrl)} 的历史模型列表；不会恢复 API key。`);
+    setModelDiscoveryItems(entry.models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      ownedBy: model.ownedBy || "provider",
+      type: model.type || "model",
+      created: model.created || 0,
+      tags: model.tags || inferModelTags({
+        id: model.id,
+        displayName: model.displayName,
+        ownedBy: model.ownedBy || "provider",
+      }),
+    })));
+  };
+  const clearModelDiscoveryHistory = () => {
+    setForm((prev) => ({ ...prev, modelDiscoveryHistory: [] }));
+    setModelDiscoveryMessage("已清空本机模型发现历史；API key 未被保存。");
+  };
   const saveCurrentProfile = () => {
     if (!form.apiUrl.trim() || !form.modelId.trim()) {
       window.alert("请先填写端点 URL 和模型 ID。");
@@ -297,18 +402,42 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       const probe = asRecord(asRecord(result.result).provider_probe || result.provider_probe);
       const status = asString(probe.status, asString(result.status, "error")) as ModelDiscoveryStatus;
       const models = providerModelsFromGatewayResult(probe);
+      const message = status === "ok"
+        ? models.length ? `已获取 ${models.length} 个模型；选择一个填入当前配置。` : "请求成功，但没有解析到模型列表。"
+        : providerProbeFailureMessage(probe);
       setModelDiscoveryStatus(status);
       setModelDiscoveryItems(models);
-      if (status === "ok") {
-        setModelDiscoveryMessage(models.length ? `已获取 ${models.length} 个模型；选择一个填入当前配置。` : "请求成功，但没有解析到模型列表。");
-      } else if (status === "approval_required") {
-        setModelDiscoveryMessage(providerProbeFailureMessage(probe));
-      } else {
-        setModelDiscoveryMessage(providerProbeFailureMessage(probe));
-      }
+      setModelDiscoveryMessage(message);
+      recordModelDiscovery({
+        apiUrl: form.apiUrl,
+        provider: effectiveProvider,
+        status,
+        statusCode: asNumber(probe.status_code) || undefined,
+        message,
+        modelCount: models.length,
+        models: models.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          ownedBy: model.ownedBy,
+          type: model.type,
+          created: model.created || undefined,
+          tags: model.tags,
+        })),
+        keyPresent: Boolean(form.apiKey.trim()),
+      });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "模型列表获取失败。";
       setModelDiscoveryStatus("error");
-      setModelDiscoveryMessage(error instanceof Error ? error.message : "模型列表获取失败。");
+      setModelDiscoveryMessage(message);
+      recordModelDiscovery({
+        apiUrl: form.apiUrl,
+        provider: effectiveProvider,
+        status: "error",
+        message,
+        modelCount: 0,
+        models: [],
+        keyPresent: Boolean(form.apiKey.trim()),
+      });
     }
   };
   return (
@@ -520,8 +649,36 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                 </div>
               )}
               {modelDiscoveryItems.length > 0 && (
-                <div className="mt-3 grid max-h-56 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
-                  {modelDiscoveryItems.slice(0, 60).map((model) => {
+                <div className="mt-3 space-y-3">
+                  <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="relative lg:w-72">
+                      <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+                      <input
+                        value={modelDiscoverySearch}
+                        onChange={(e) => setModelDiscoverySearch(e.target.value)}
+                        placeholder="搜索模型 ID / provider / 能力..."
+                        className="w-full rounded-xl border border-slate-800 bg-slate-950/60 py-2 pl-9 pr-3 text-xs text-white outline-none focus:border-cyan-500/50"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {modelDiscoveryTagOptions.map((tag) => {
+                        const active = modelDiscoveryTag === tag.id;
+                        const count = tag.id === "all" ? modelDiscoveryItems.length : modelDiscoveryItems.filter((model) => model.tags.includes(tag.id)).length;
+                        return (
+                          <button
+                            key={tag.id}
+                            type="button"
+                            onClick={() => setModelDiscoveryTag(tag.id)}
+                            className={`rounded-full border px-2.5 py-1 text-[10px] transition-colors ${active ? "border-cyan-400 bg-cyan-500/20 text-cyan-100" : "border-slate-800 bg-slate-950/50 text-slate-500 hover:border-slate-700 hover:text-slate-300"}`}
+                          >
+                            {tag.label} {count}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="grid max-h-56 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+                  {filteredModelDiscoveryItems.slice(0, 60).map((model) => {
                     const active = form.modelId === model.id;
                     return (
                       <div key={model.id} className={`rounded-2xl border p-3 ${active ? "border-cyan-400 bg-cyan-500/15" : "border-slate-800 bg-slate-950/45"}`}>
@@ -533,6 +690,15 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                           <span className="truncate">{model.ownedBy} · {model.type}</span>
                           {active && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />}
                         </div>
+                        {model.tags.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {model.tags.slice(0, 4).map((tag) => (
+                              <span key={tag} className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">
+                                {modelDiscoveryTagOptions.find((item) => item.id === tag)?.label || tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         <div className="mt-3 flex gap-2">
                           <button type="button" onClick={() => useDiscoveredModel(model)} className="rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-cyan-100 hover:border-cyan-500/40 hover:bg-cyan-500/10">
                             填入
@@ -544,6 +710,63 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                       </div>
                     );
                   })}
+                  {filteredModelDiscoveryItems.length === 0 && (
+                    <div className="col-span-full rounded-2xl border border-dashed border-slate-800 px-4 py-6 text-center text-xs text-slate-500">
+                      当前筛选没有匹配模型。
+                    </div>
+                  )}
+                  </div>
+                </div>
+              )}
+              {modelDiscoveryHistory.length > 0 && (
+                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/35 p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-xs font-medium text-slate-200">最近模型发现</div>
+                      <p className="mt-1 text-[11px] text-slate-500">只保存端点、状态和模型 ID 列表；不会保存或回显 API key。</p>
+                    </div>
+                    <button type="button" onClick={clearModelDiscoveryHistory} className="self-start rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-400 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-200">
+                      清空历史
+                    </button>
+                  </div>
+                  <div className="mt-3 grid max-h-48 gap-2 overflow-y-auto pr-1 md:grid-cols-2">
+                    {modelDiscoveryHistory.slice(0, MODEL_DISCOVERY_HISTORY_LIMIT).map((entry) => {
+                      const ok = entry.status === "ok";
+                      const activeEndpoint = entry.apiUrl === form.apiUrl;
+                      const historyTags = Array.from(new Set(entry.models.flatMap((model) => model.tags || []))).slice(0, 3);
+                      return (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onClick={() => replayDiscoveryHistory(entry)}
+                          className={`rounded-xl border p-3 text-left transition-colors ${activeEndpoint ? "border-cyan-500/40 bg-cyan-500/10" : "border-slate-800 bg-slate-900/60 hover:border-cyan-500/30 hover:bg-slate-900"}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="truncate text-xs font-medium text-slate-100">{formatPresetHost(entry.apiUrl)}</div>
+                              <div className="mt-1 truncate font-mono text-[10px] text-slate-500">{entry.models[0]?.id || entry.message}</div>
+                            </div>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${ok ? "bg-emerald-500/10 text-emerald-200" : "bg-amber-500/10 text-amber-200"}`}>
+                              {ok ? `${entry.modelCount} 个` : entry.statusCode ? `HTTP ${entry.statusCode}` : entry.status}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-slate-500">
+                            <span>{formatModelDiscoveryTime(entry.createdAt)} · key {entry.keyPresent ? "曾填写" : "未填写"}</span>
+                            <span>载入</span>
+                          </div>
+                          {historyTags.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {historyTags.map((tag) => (
+                                <span key={tag} className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">
+                                  {modelDiscoveryTagOptions.find((item) => item.id === tag)?.label || tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
