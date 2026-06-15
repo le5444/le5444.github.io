@@ -78,6 +78,36 @@ function normalizePayload(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function bridgeRequestRecords(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.requests)) {
+      return record.requests.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+    }
+    return [record];
+  }
+  return [];
+}
+
+function executorBridgeRequestFromRecord(record: Record<string, unknown>, manifest: ExecutorBridgeManifest) {
+  const action = normalizeAction(record.action);
+  if (!action || manifest.deniedActions.includes(action)) return null;
+  const payload = normalizePayload(record.payload);
+  const purpose = String(record.purpose || record.reason || "AI 请求调用本地执行桥").trim();
+  return createExecutorBridgeRequest({
+    manifest,
+    action,
+    purpose,
+    payload,
+    commandDraft: action === "run_command"
+      ? { command: String(payload.command || ""), cwd: String(payload.cwd || ""), purpose }
+      : undefined,
+  });
+}
+
 export function buildExecutorBridgeManifest(params: {
   plan: PersonalOSPlan;
   tools: ToolRouteBundle;
@@ -118,26 +148,16 @@ export function createExecutorBridgeRequest(params: {
 export function extractExecutorBridgeRequestsFromText(text: string, manifest: ExecutorBridgeManifest = DEFAULT_EXECUTOR_BRIDGE): ExecutorBridgeRequest[] {
   const matches = [...(text || "").matchAll(/<bridge-request>([\s\S]*?)<\/bridge-request>/gi)];
   return matches
-    .map((match) => {
+    .flatMap((match) => {
       try {
-        const parsed = JSON.parse(stripCodeFence(match[1])) as Record<string, unknown>;
-        const action = normalizeAction(parsed.action);
-        if (!action || manifest.deniedActions.includes(action)) return null;
-        const payload = normalizePayload(parsed.payload);
-        return createExecutorBridgeRequest({
-          manifest,
-          action,
-          purpose: String(parsed.purpose || parsed.reason || "AI 请求调用本地执行桥").trim(),
-          payload,
-          commandDraft: action === "run_command"
-            ? { command: String(payload.command || ""), cwd: String(payload.cwd || ""), purpose: String(parsed.purpose || parsed.reason || "") }
-            : undefined,
-        });
+        const parsed = JSON.parse(stripCodeFence(match[1])) as unknown;
+        return bridgeRequestRecords(parsed)
+          .map((record) => executorBridgeRequestFromRecord(record, manifest))
+          .filter((item): item is ExecutorBridgeRequest => Boolean(item));
       } catch {
-        return null;
+        return [];
       }
     })
-    .filter((item): item is ExecutorBridgeRequest => Boolean(item));
 }
 
 export function renderExecutorBridgeRequestMarkdown(request: ExecutorBridgeRequest) {
@@ -183,7 +203,8 @@ ${manifest.safety.map((item, index) => `${index + 1}. ${item}`).join("\n")}
 7. skill_route/skill_invoke 可以读取本地或内置 SKILL.md 指令；skill_run 只能运行已激活 Skill，且需要 --execute-skill + payload.execute=true。
 8. provider_catalog/provider_status 是只读 Provider 注册表；provider_probe 只能探测模型列表端点，执行已排队探针仍需要 --execute-provider + execute=true，且远程探测必须显式 allow_remote_model=true。
 9. worker_run 的 model_task 需要 execute_model=true；远程模型还需要 allow_remote_model=true，执行时由 Gateway 子进程隔离，worker_cancel 只处理已登记 job_id。
-10. 当你需要本地工具时，输出以下 JSON 标签，除此之外不要伪造执行结果：
+10. 一个 <bridge-request> 标签内可以放单个 JSON 对象、JSON 对象数组，或 {"requests":[...]}；多个独立标签也可以。
+11. 当你需要本地工具时，输出以下 JSON 标签，除此之外不要伪造执行结果：
 
 <bridge-request>
 {

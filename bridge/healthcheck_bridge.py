@@ -1080,18 +1080,40 @@ def run_direct_checks() -> List[Dict[str, Any]]:
             "dimension": "skill",
             "limit": 4,
             "current_text": "需要自动挂载小说技能、检索紧凑记忆包，并隔离命令执行。",
+            "workspace_id": "healthcheck-workspace",
+            "workspace_root_profile": {
+                "root_path": "C:/Projects/ZhimengHealthcheck",
+                "access_mode": "project-bound",
+                "include_globs": ["**/*.md", "**/*.ts", "**/*.tsx"],
+                "exclude_globs": ["node_modules/**", "dist/**"],
+                "notes": "Healthcheck fixture: project mode must preserve the bound workspace root.",
+            },
+            "workspace_scan_index": {
+                "root_path": "C:/Projects/ZhimengHealthcheck",
+                "access_profile": "project",
+                "file_count": 12,
+                "dir_count": 4,
+                "item_count": 16,
+                "has_more": False,
+                "status": "indexed",
+            },
         }, "healthcheck agent context pack")
         assert_true(result.get("status") == "ok", "context_pack should succeed")
         pack = result.get("context_pack", {})
         active = set(pack.get("active_skill_keys", []))
+        context_items = pack.get("context_pack", [])
+        context_kinds = {item.get("kind") for item in context_items if isinstance(item, dict)}
         assert_true("novel-creation-suite" in active, "context_pack should include novel-creation-suite")
         assert_true("memory_retrieve" in pack.get("schema", {}).get("uses", []), "context_pack should use memory_retrieve")
         assert_true("skill_route" in pack.get("schema", {}).get("uses", []), "context_pack should use skill_route")
         assert_true("run_command" in pack.get("tool_policy", {}).get("excluded_tool_scopes", []), "writing context_pack should exclude run_command")
+        assert_true("workspace_root_profile" in context_kinds, "context_pack should include workspace_root_profile")
+        assert_true("workspace_scan_index" in context_kinds, "context_pack should include workspace_scan_index")
         return {
             "domain": pack.get("task", {}).get("domain"),
             "active_skill_keys": sorted(active),
-            "context_items": len(pack.get("context_pack", [])),
+            "context_items": len(context_items),
+            "context_kinds": sorted(str(item) for item in context_kinds if item),
             "excluded": pack.get("tool_policy", {}).get("excluded_tool_scopes", []),
         }
 

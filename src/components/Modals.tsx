@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { CheckCircle2, Eye, EyeOff, ListChecks, Loader2, Pencil, RotateCcw, Search, Settings, Sparkles, Trash2, Upload, X, Zap } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, ListChecks, Loader2, Pencil, RotateCcw, Search, Settings, Trash2, Upload, X, Zap } from "lucide-react";
 import { type ApiSettings, type ModelDiscoveryHistoryEntry, PROVIDER_LABELS, PROVIDER_PRESETS, allowsEmptyApiKey, inferProvider, type ProviderId } from "../store/settings";
 import { type BookProject } from "../store/library";
 import { type PromptTemplate, type WorkspaceFile } from "../store/workspace";
@@ -156,13 +156,13 @@ function providerProbeFailureMessage(probe: Record<string, unknown>) {
     return reason || "Gateway 未开启 --execute-provider，或远程探针未授权。";
   }
   if (status === "http_error") {
-    if (statusCode === 401) return "端点已到达，但 API key 缺失或格式不被接受。请确认密钥已填写，并使用 Bearer / x-api-key 兼容的 Provider。";
-    if (statusCode === 403) return "端点已到达，但服务端拒绝当前 API key。常见原因是 key 权限、额度、模型白名单或账号绑定不匹配。";
-    if (statusCode === 404 || statusCode === 405) return "端点已到达，但 `/models` 路径不可用。请确认 base URL 是否应填到 `/v1`，或该 Provider 是否支持模型列表接口。";
+    if (statusCode === 401) return "端点已到达，但密钥缺失或格式不被接受。请确认密钥已填写，并使用 Bearer / x-api-key 兼容的服务商。";
+    if (statusCode === 403) return "端点已到达，但服务端拒绝当前密钥。常见原因是权限、额度、模型白名单或账号绑定不匹配。";
+    if (statusCode === 404 || statusCode === 405) return "端点已到达，但 `/models` 路径不可用。请确认接口地址是否应填到 `/v1`，或该服务商是否支持模型列表接口。";
     return `端点返回 HTTP ${statusCode || "错误"}${reason ? `：${reason}` : ""}`;
   }
   if (status === "network_error") {
-    return reason ? `网络连接失败：${reason}` : "网络连接失败，请检查 base URL、代理、防火墙或 TLS 证书。";
+    return reason ? `网络连接失败：${reason}` : "网络连接失败，请检查接口地址、代理、防火墙或 TLS 证书。";
   }
   return (reason || text || "模型列表获取失败。").slice(0, 260);
 }
@@ -265,7 +265,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       modelName: entry.models[0]?.displayName || prev.modelName,
     }));
     setModelDiscoveryStatus(entry.status as ModelDiscoveryStatus);
-    setModelDiscoveryMessage(`已载入 ${formatPresetHost(entry.apiUrl)} 的历史模型列表；不会恢复 API key。`);
+    setModelDiscoveryMessage(`已载入 ${formatPresetHost(entry.apiUrl)} 的历史模型列表；不会恢复密钥。`);
     setModelDiscoveryItems(entry.models.map((model) => ({
       id: model.id,
       displayName: model.displayName,
@@ -281,7 +281,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   };
   const clearModelDiscoveryHistory = () => {
     setForm((prev) => ({ ...prev, modelDiscoveryHistory: [] }));
-    setModelDiscoveryMessage("已清空本机模型发现历史；API key 未被保存。");
+    setModelDiscoveryMessage("已清空本机模型发现历史；密钥未被保存。");
   };
   const saveCurrentProfile = () => {
     if (!form.apiUrl.trim() || !form.modelId.trim()) {
@@ -365,12 +365,12 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   const discoverModels = async () => {
     if (!form.apiUrl.trim()) {
       setModelDiscoveryStatus("error");
-      setModelDiscoveryMessage("请先填写 base URL。");
+      setModelDiscoveryMessage("请先填写接口地址。");
       return;
     }
     if (!keyOptional && !form.apiKey.trim()) {
       setModelDiscoveryStatus("error");
-      setModelDiscoveryMessage("这个端点需要 API key，填入后再获取模型列表。");
+      setModelDiscoveryMessage("这个端点需要密钥，填入后再获取模型列表。");
       return;
     }
     setModelDiscoveryStatus("running");
@@ -442,24 +442,24 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   };
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 p-4">
-      <div className={`${modalPanelClass} max-w-5xl`}>
-        <div className="flex items-center justify-between border-b border-slate-800 px-6 py-5 shrink-0">
-          <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600"><Settings className="h-7 w-7 text-white" /></div>
+      <div className={`${modalPanelClass} max-h-[82vh] max-w-3xl rounded-2xl`}>
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4 shrink-0">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-cyan-200"><Settings className="h-5 w-5" /></div>
             <div>
-              <h2 className="text-2xl font-bold text-white">AI 模型设置</h2>
-              <p className="text-sm text-slate-500">支持几十种 OpenAI 兼容平台、Claude、Gemini、Ollama、本地模型与自部署端点。</p>
+              <h2 className="text-lg font-semibold text-white">接口设置</h2>
+              <p className="text-xs text-slate-500">配置服务商、接口地址、密钥和模型 ID。</p>
             </div>
           </div>
           <button onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-800 hover:text-white"><X className="h-5 w-5" /></button>
         </div>
 
-        <div className="space-y-5 px-6 py-6 overflow-y-auto">
+        <div className="space-y-4 overflow-y-auto px-5 py-5">
           {/* 快速预设 */}
           <div className="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4">
             <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <div className="flex items-center gap-2 text-sm font-medium text-purple-200"><Zap className="h-4 w-4" /> API 预设库</div>
+                <div className="flex items-center gap-2 text-sm font-medium text-purple-200"><Zap className="h-4 w-4" /> 接口预设</div>
                 <p className="mt-1 text-xs text-slate-500">点选后自动填端点和模型 ID，密钥仍由你自己填写；所有字段都可以再手动改。</p>
               </div>
               <div className="relative w-full lg:w-80">
@@ -524,7 +524,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-sm font-medium text-blue-200">常用模型配置</div>
-                <p className="mt-1 text-xs text-slate-500">可以保存多个 API、模型和密钥，本地一键切换。</p>
+                <p className="mt-1 text-xs text-slate-500">可以保存多个接口、模型和密钥，本地一键切换。</p>
               </div>
               <button
                 onClick={saveCurrentProfile}
@@ -573,7 +573,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
 
           <div className="grid gap-5 md:grid-cols-2">
             <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">Provider 类型</label>
+              <label className="mb-1 block text-sm font-medium text-slate-300">服务商类型</label>
               <select
                 value={effectiveProvider}
                 onChange={(e) => setField("provider", e.target.value as ProviderId)}
@@ -583,7 +583,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                   <option key={id} value={id}>{PROVIDER_LABELS[id]}</option>
                 ))}
               </select>
-              <p className="mt-1 text-xs text-slate-500">不同 Provider 的 wire format 不同：Anthropic 用 x-api-key + Messages API；Gemini 用 query key + generateContent；Ollama 走 /api/chat 或 /v1。</p>
+              <p className="mt-1 text-xs text-slate-500">不同服务商的协议不同；这里只选择类型，具体路径会按接口规则补全。</p>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-300">显示名称</label>
@@ -596,10 +596,10 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
             <div className="md:col-span-2">
               <label className="mb-1 block text-sm font-medium text-slate-300">端点 URL *</label>
               <input value={form.apiUrl} onChange={(e) => setField("apiUrl", e.target.value)} placeholder={effectiveProvider === "anthropic" ? "https://api.anthropic.com/v1" : effectiveProvider === "gemini" ? "https://generativelanguage.googleapis.com/v1beta" : effectiveProvider === "ollama" ? "http://localhost:11434" : "https://api.deepseek.com/v1"} className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-purple-500" />
-              <p className="mt-1 text-xs text-slate-500">OpenAI 兼容只需填到 /v1；其它 provider 也只填 base URL，路径会自动补全。</p>
+              <p className="mt-1 text-xs text-slate-500">OpenAI 兼容只需填到 /v1；其它服务商也只填基础地址，路径会自动补全。</p>
             </div>
             <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">API 密钥 {!keyOptional && "*"}{keyOptional && <span className="ml-2 text-xs text-slate-500">(本地端点可留空)</span>}</label>
+              <label className="mb-1 block text-sm font-medium text-slate-300">接口密钥 {!keyOptional && "*"}{keyOptional && <span className="ml-2 text-xs text-slate-500">(本地端点可留空)</span>}</label>
               <div className="relative">
                 <input type={showKey ? "text" : "password"} value={form.apiKey} onChange={(e) => setField("apiKey", e.target.value)} placeholder={effectiveProvider === "anthropic" ? "sk-ant-..." : "sk-..."} className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 pr-12 text-sm text-white outline-none focus:border-purple-500" />
                 <button onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
@@ -609,7 +609,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="flex items-center gap-2 text-sm font-medium text-cyan-200"><ListChecks className="h-4 w-4" /> 模型发现</div>
-                  <p className="mt-1 text-xs text-slate-500">按当前 base URL 和 API key 读取 `/models`，只获取模型名称，不调用模型生成。</p>
+                  <p className="mt-1 text-xs text-slate-500">按当前接口地址和密钥读取 `/models`，只获取模型名称，不调用模型生成。</p>
                 </div>
                 <button
                   type="button"
@@ -627,7 +627,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                   <div className="mt-1 truncate text-slate-200">{form.apiUrl ? formatPresetHost(form.apiUrl) : "未填写"}</div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
-                  <span className="text-slate-500">API key</span>
+                  <span className="text-slate-500">密钥</span>
                   <div className={form.apiKey || keyOptional ? "mt-1 text-emerald-300" : "mt-1 text-amber-300"}>{form.apiKey ? "已填写" : keyOptional ? "可留空" : "必填"}</div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
@@ -723,7 +723,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <div className="text-xs font-medium text-slate-200">最近模型发现</div>
-                      <p className="mt-1 text-[11px] text-slate-500">只保存端点、状态和模型 ID 列表；不会保存或回显 API key。</p>
+                      <p className="mt-1 text-[11px] text-slate-500">只保存端点、状态和模型 ID 列表；不会保存或回显密钥。</p>
                     </div>
                     <button type="button" onClick={clearModelDiscoveryHistory} className="self-start rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-slate-400 hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-200">
                       清空历史
@@ -781,29 +781,10 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
               <p className="mt-1 text-xs text-slate-500">写长章节建议 4096-8192。Anthropic 默认 8192。</p>
             </div>
           </div>
-
-          {/* 反崩盘默认开关 */}
-          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium text-emerald-200"><Sparkles className="h-4 w-4" /> 反崩盘默认行为</div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="flex items-center gap-3 text-sm text-slate-300">
-                <input type="checkbox" checked={!!form.antiCollapseDefault} onChange={(e) => setField("antiCollapseDefault", e.target.checked)} className="h-4 w-4 accent-emerald-500" />
-                默认启用反崩盘（约束卡 + 5 维 AI 腔扫描 + 一致性检查）
-              </label>
-              <label className="flex items-center gap-3 text-sm text-slate-300">
-                <input type="checkbox" checked={!!form.voiceLockDefault} onChange={(e) => setField("voiceLockDefault", e.target.checked)} className="h-4 w-4 accent-emerald-500" />
-                默认启用声音指纹锁定（防角色对白同质化）
-              </label>
-              <label className="flex items-center gap-3 text-sm text-slate-300">
-                <input type="checkbox" checked={!!form.chroniclerAuto} onChange={(e) => setField("chroniclerAuto", e.target.checked)} className="h-4 w-4 accent-emerald-500" />
-                每章生成后自动跑事实编年（chronicler）
-              </label>
-            </div>
-          </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-800 px-6 py-5 shrink-0">
-          <button onClick={() => setForm((prev) => ({ apiUrl: "", apiKey: "", modelId: "", modelName: "", provider: undefined, temperature: 0.85, maxTokens: undefined, profiles: prev.profiles || [], activeProfileId: undefined, antiCollapseDefault: true, voiceLockDefault: true, chroniclerAuto: false }))} className="text-sm text-red-400">重置当前配置</button>
+        <div className="flex items-center justify-between border-t border-slate-800 px-5 py-4 shrink-0">
+          <button onClick={() => setForm((prev) => ({ ...prev, apiUrl: "", apiKey: "", modelId: "", modelName: "", provider: undefined, temperature: 0.85, maxTokens: undefined, activeProfileId: undefined }))} className="text-sm text-red-400">重置当前配置</button>
           <div className="flex gap-3">
             <button onClick={onClose} className="rounded-2xl px-5 py-2.5 text-sm text-slate-400 hover:bg-slate-800">取消</button>
             <button onClick={() => { onSave({ ...form, provider: effectiveProvider }); onClose(); }} className="rounded-2xl bg-purple-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-500">保存设置</button>

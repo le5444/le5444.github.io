@@ -157,7 +157,7 @@ export function WorkspacePage({
     { id: "cmd-associate", label: "🔗 关联内容", category: "界面", action: () => setShowAssociatePicker(true) },
     { id: "cmd-distillation", label: "🧪 选择蒸馏", category: "界面", action: () => setShowDistillationPicker(true) },
     { id: "cmd-history", label: "🕰️ 版本历史", category: "界面", action: () => setShowVersionHistory(true) },
-    { id: "cmd-settings", label: "⚙️ API 设置", category: "界面", action: () => onOpenSettings() },
+    { id: "cmd-settings", label: "⚙️ 接口设置", category: "界面", action: () => onOpenSettings() },
     { id: "cmd-back", label: "← 返回首页", category: "界面", action: () => { persistWorkspace(workspace); onBack(); } },
   ], [getPlainText, handleExportCurrentBackup, isZenMode, onBack, onOpenSettings, persistWorkspace, workspace]);
 

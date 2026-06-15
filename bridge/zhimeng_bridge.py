@@ -2426,13 +2426,17 @@ def load_request(args: argparse.Namespace) -> Dict[str, Any]:
 
 def save_record(folder: str, req: Dict[str, Any], result: Dict[str, Any]) -> str:
     record_id = str(uuid.uuid4())
+    agent_context = agent_context_from_request(req, result)
     path = bridge_dir(folder) / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{record_id}.json"
-    path.write_text(json.dumps({
+    record = {
         "id": record_id,
         "created_at": now_iso(),
         "request": redact_record_secrets(req),
         "result": redact_record_secrets(result),
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    }
+    if agent_context:
+        record["agent_context"] = redact_record_secrets(agent_context)
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record_id
 
 
@@ -2469,6 +2473,62 @@ def as_record(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def as_compact_text(value: Any, limit: int = 240) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    return text[:limit]
+
+
+def normalize_agent_context(value: Any) -> Dict[str, Any]:
+    raw = as_record(value)
+    if not raw:
+        return {}
+    approval_ids = [
+        as_compact_text(item, 120)
+        for item in raw.get("approval_ids", [])
+        if as_compact_text(item, 120)
+    ] if isinstance(raw.get("approval_ids"), list) else []
+    context_refs = []
+    if isinstance(raw.get("context_refs"), list):
+        for item in raw.get("context_refs", [])[:12]:
+            ref = as_record(item)
+            context_refs.append({
+                "id": as_compact_text(ref.get("id"), 160),
+                "kind": as_compact_text(ref.get("kind"), 80),
+                "title": as_compact_text(ref.get("title"), 200),
+                "ref": as_compact_text(ref.get("ref"), 240),
+                "source": as_compact_text(ref.get("source"), 120),
+                "status": as_compact_text(ref.get("status"), 80),
+            })
+    compact: Dict[str, Any] = {
+        "source": as_compact_text(raw.get("source"), 80),
+        "mode": as_compact_text(raw.get("mode"), 80),
+        "view": as_compact_text(raw.get("view"), 80),
+        "thread_id": as_compact_text(raw.get("thread_id"), 160),
+        "thread_title": as_compact_text(raw.get("thread_title"), 240),
+        "thread_status": as_compact_text(raw.get("thread_status"), 80),
+        "workspace_id": as_compact_text(raw.get("workspace_id"), 160),
+        "workspace_title": as_compact_text(raw.get("workspace_title"), 240),
+        "workspace_domain": as_compact_text(raw.get("workspace_domain"), 160),
+        "action": as_compact_text(raw.get("action"), 120),
+        "purpose": as_compact_text(raw.get("purpose"), 400),
+        "approval_ids": approval_ids[:30],
+        "context_attachment_count": int(raw.get("context_attachment_count") or 0) if str(raw.get("context_attachment_count") or "").isdigit() else 0,
+        "message_count": int(raw.get("message_count") or 0) if str(raw.get("message_count") or "").isdigit() else 0,
+        "context_refs": context_refs,
+        "at": raw.get("at") if isinstance(raw.get("at"), (int, float)) else 0,
+    }
+    return {key: val for key, val in compact.items() if val not in ("", [], {}, 0)}
+
+
+def agent_context_from_request(req: Dict[str, Any], result: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    payload = as_record(req.get("payload"))
+    return normalize_agent_context(
+        payload.get("__agent_context")
+        or req.get("__agent_context")
+        or as_record(result or {}).get("agent_context")
+    )
+
+
 def request_record_enabled(req: Dict[str, Any], default: bool = True) -> bool:
     value = req.get("record")
     if isinstance(value, bool):
@@ -2483,11 +2543,22 @@ def request_record_enabled(req: Dict[str, Any], default: bool = True) -> bool:
 def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
     limit = max(1, min(int(payload.get("limit") or 20), 100))
     action_filter = str(payload.get("action") or "").strip()
+    thread_filter = str(payload.get("thread_id") or payload.get("threadId") or "").strip()
+    workspace_filter = str(payload.get("workspace_id") or payload.get("workspaceId") or "").strip()
     records = recent_records("approvals", limit=limit)
     if action_filter:
         records = [
             record for record in records
             if str(as_record(record.get("request")).get("action") or as_record(record.get("result")).get("action") or "") == action_filter
+        ]
+    if thread_filter or workspace_filter:
+        records = [
+            record for record in records
+            for agent_context in [as_record(record.get("agent_context")) or agent_context_from_request(as_record(record.get("request")), as_record(record.get("result")))]
+            if (
+                (not thread_filter or str(agent_context.get("thread_id") or "") == thread_filter)
+                and (not workspace_filter or str(agent_context.get("workspace_id") or "") == workspace_filter)
+            )
         ]
     by_action: Dict[str, int] = {}
     by_status: Dict[str, int] = {}
@@ -2496,6 +2567,7 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
         request = as_record(record.get("request"))
         result = as_record(record.get("result"))
         decision = as_record(record.get("decision"))
+        agent_context = as_record(record.get("agent_context")) or agent_context_from_request(request, result)
         action = str(request.get("action") or result.get("action") or "unknown")
         status = str(decision.get("status") or result.get("status") or "pending")
         by_action[action] = by_action.get(action, 0) + 1
@@ -2512,6 +2584,7 @@ def approval_status(payload: Dict[str, Any]) -> Dict[str, Any]:
             "target": str(decision.get("target") or result.get("target") or as_record(result.get("memory_management")).get("target_id") or ""),
             "proposal": result.get("memory_management") if isinstance(result.get("memory_management"), dict) else result.get("write_file"),
             "decision": decision,
+            "agent_context": agent_context,
         })
     return {
         "count": len(records),
@@ -2564,6 +2637,8 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
     source_filter = str(payload.get("source") or "").strip().lower()
     status_filter = str(payload.get("status") or "").strip().lower()
     type_filter = str(payload.get("type") or "").strip().lower()
+    thread_filter = str(payload.get("thread_id") or payload.get("threadId") or "").strip()
+    workspace_filter = str(payload.get("workspace_id") or payload.get("workspaceId") or "").strip()
     after_raw = payload.get("after_epoch", payload.get("since_epoch", payload.get("cursor_epoch", 0)))
     after_epoch = parse_event_time(after_raw, 0) if after_raw not in (None, "", 0) else 0
     after_id = str(payload.get("after_id") or payload.get("cursor_id") or "").strip()
@@ -2572,6 +2647,7 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
     for record in recent_records("runs", limit=limit * 2):
         request = as_record(record.get("request"))
         result = as_record(record.get("result"))
+        agent_context = as_record(record.get("agent_context")) or agent_context_from_request(request, result)
         action = str(request.get("action") or result.get("action") or "unknown")
         status = str(result.get("status") or "recorded")
         message = str(result.get("message") or request.get("purpose") or result.get("purpose") or "")
@@ -2588,6 +2664,7 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "action": action,
                 "purpose": request.get("purpose") or result.get("purpose"),
                 "approval_id": result.get("approval_id"),
+                "agent_context": agent_context,
             },
         ))
 
@@ -2595,6 +2672,7 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
         request = as_record(record.get("request"))
         result = as_record(record.get("result"))
         decision = as_record(record.get("decision"))
+        agent_context = as_record(record.get("agent_context")) or agent_context_from_request(request, result)
         action = str(request.get("action") or result.get("action") or "unknown")
         status = str(decision.get("status") or result.get("status") or "pending")
         message = str(decision.get("message") or decision.get("reason") or result.get("message") or request.get("purpose") or "")
@@ -2611,6 +2689,7 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "action": action,
                 "purpose": request.get("purpose") or result.get("purpose"),
                 "target": decision.get("target") or result.get("target"),
+                "agent_context": agent_context,
             },
         ))
 
@@ -2675,6 +2754,12 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
         if status_filter and str(event.get("status") or "").lower() != status_filter:
             return False
         if type_filter and str(event.get("type") or "").lower() != type_filter:
+            return False
+        event_record = as_record(event.get("record"))
+        agent_context = as_record(event_record.get("agent_context"))
+        if thread_filter and str(agent_context.get("thread_id") or "") != thread_filter:
+            return False
+        if workspace_filter and str(agent_context.get("workspace_id") or "") != workspace_filter:
             return False
         return True
 
@@ -4336,6 +4421,58 @@ def build_context_pack(payload: Dict[str, Any], purpose: str) -> Dict[str, Any]:
             "source": str(item.get("source") or "agent_thread")[:160],
             "status": str(item.get("status") or "attached")[:64],
             "injected_by": "agent_thread",
+        })
+    workspace_root_profile = payload.get("workspace_root_profile") if isinstance(payload.get("workspace_root_profile"), dict) else {}
+    if workspace_root_profile:
+        root_path = str(workspace_root_profile.get("root_path") or "").strip()
+        access_mode = str(workspace_root_profile.get("access_mode") or "virtual").strip()
+        include_globs = workspace_root_profile.get("include_globs") if isinstance(workspace_root_profile.get("include_globs"), list) else []
+        exclude_globs = workspace_root_profile.get("exclude_globs") if isinstance(workspace_root_profile.get("exclude_globs"), list) else []
+        notes = str(workspace_root_profile.get("notes") or "").strip()
+        thread_context.append({
+            "id": f"workspace-root-profile-{str(payload.get('workspace_id') or 'current')}",
+            "dimension": "project",
+            "kind": "workspace_root_profile",
+            "title": "工作区根目录映射",
+            "summary": " · ".join([
+                f"root {root_path or '未设置'}",
+                f"mode {access_mode}",
+                f"include {' / '.join(str(item) for item in include_globs[:6]) or '未指定'}",
+                f"exclude {' / '.join(str(item) for item in exclude_globs[:6]) or '未指定'}",
+                notes[:240],
+                "真实读取仍需 read_file/workspace_scan 与权限闸门",
+            ]).strip(" · "),
+            "ref": root_path or str(payload.get("workspace_id") or "workspace"),
+            "source": "workspace_root_profile",
+            "status": access_mode or "virtual",
+            "injected_by": "workspace_root_profile",
+        })
+    workspace_scan_index = payload.get("workspace_scan_index") if isinstance(payload.get("workspace_scan_index"), dict) else {}
+    if workspace_scan_index:
+        root_path = str(workspace_scan_index.get("root_path") or "").strip()
+        access_profile = str(workspace_scan_index.get("access_profile") or "").strip()
+        file_count = int(workspace_scan_index.get("file_count") or 0)
+        dir_count = int(workspace_scan_index.get("dir_count") or 0)
+        item_count = int(workspace_scan_index.get("item_count") or workspace_scan_index.get("returned") or 0)
+        has_more = bool(workspace_scan_index.get("has_more"))
+        thread_context.append({
+            "id": f"workspace-scan-index-{str(payload.get('workspace_id') or 'current')}",
+            "dimension": "project",
+            "kind": "workspace_scan_index",
+            "title": "工作区真实路径索引",
+            "summary": " · ".join([
+                f"root {root_path or '未设置'}",
+                f"profile {access_profile or 'workspace'}",
+                f"{file_count} files",
+                f"{dir_count} dirs",
+                f"{item_count} indexed",
+                "has_more" if has_more else "",
+                "索引只代表目录元数据，正文读取必须另走 read_file",
+            ]).strip(" · "),
+            "ref": root_path or str(payload.get("workspace_id") or "workspace"),
+            "source": "workspace_scan_index",
+            "status": str(workspace_scan_index.get("status") or "indexed")[:64],
+            "injected_by": "workspace_scan_index",
         })
     memory_context = memory.get("context_pack", [])
 
@@ -8456,6 +8593,9 @@ def handle_request(
     request_execute = bool(req.get("execute") or payload.get("execute"))
     access_profile = normalize_file_access_profile(payload)
     result = base_result(action, purpose, execute or execute_write or execute_memory or execute_command or execute_scheduler or execute_web or execute_mcp or execute_provider or execute_skill)
+    agent_context = agent_context_from_request(req)
+    if agent_context:
+        result["agent_context"] = agent_context
     result["tool_access"] = {
         "file_access_profile": access_profile,
         "request_execute_read_enabled": execute,
@@ -9292,6 +9432,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         ticks = max(1, min(int((query.get("ticks") or ["15"])[0] or 15), 120))
         after_epoch = parse_event_time((query.get("after_epoch") or ["0"])[0], 0)
         after_id = str((query.get("after_id") or [""])[0] or "")
+        thread_id = str((query.get("thread_id") or query.get("threadId") or [""])[0] or "").strip()
+        workspace_id = str((query.get("workspace_id") or query.get("workspaceId") or [""])[0] or "").strip()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -9307,10 +9449,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "stream": "runtime_events",
             "interval": interval,
             "ticks": ticks,
+            "thread_id": thread_id,
+            "workspace_id": workspace_id,
             "cursor": {"at_epoch": cursor_epoch, "id": cursor_id},
         })
         for tick in range(ticks):
-            payload = {"limit": limit, "after_epoch": cursor_epoch, "after_id": cursor_id}
+            payload = {
+                "limit": limit,
+                "after_epoch": cursor_epoch,
+                "after_id": cursor_id,
+                "thread_id": thread_id,
+                "workspace_id": workspace_id,
+            }
             events_payload = runtime_events(payload)
             cursor = as_record(events_payload.get("cursor"))
             cursor_epoch = float(cursor.get("at_epoch") or cursor_epoch or 0)

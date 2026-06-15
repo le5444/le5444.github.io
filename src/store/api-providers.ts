@@ -433,6 +433,36 @@ export function allowsEmptyApiKey(apiUrl: string, provider?: ProviderId) {
   return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/|$)/.test(url);
 }
 
+function stringFromUnknown(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function apiErrorDetailFromText(raw: string) {
+  const text = raw.trim();
+  if (!text) return "";
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const error = (parsed.error && typeof parsed.error === "object" ? parsed.error : {}) as Record<string, unknown>;
+    const code = stringFromUnknown(parsed.code) || stringFromUnknown(error.code);
+    const message = stringFromUnknown(parsed.message)
+      || stringFromUnknown(error.message)
+      || stringFromUnknown(parsed.error_description)
+      || stringFromUnknown(parsed.detail);
+    const detail = [code, message].filter(Boolean).join("：");
+    if (detail) return detail;
+  } catch {
+    /* fall through to raw text */
+  }
+  return text.slice(0, 400);
+}
+
+async function apiErrorFromResponse(resp: Response) {
+  const raw = await resp.text().catch(() => "");
+  const detail = apiErrorDetailFromText(raw);
+  const statusText = resp.statusText ? ` ${resp.statusText}` : "";
+  return new Error(`API 错误 (${resp.status}${statusText})${detail ? `：${detail}` : ""}`);
+}
+
 // 退避重试包装
 async function withRetry<T>(fn: () => Promise<T>, retries = 2, baseDelayMs = 800, signal?: AbortSignal): Promise<T> {
   let lastErr: unknown;
@@ -681,8 +711,7 @@ async function streamSSE(
 ): Promise<string> {
   const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    throw new Error(`API 错误 (${resp.status}): ${errText.slice(0, 400)}`);
+    throw await apiErrorFromResponse(resp);
   }
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("无法读取响应流");
@@ -726,8 +755,7 @@ async function streamNDJSON(
 ): Promise<string> {
   const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    throw new Error(`API 错误 (${resp.status}): ${errText.slice(0, 400)}`);
+    throw await apiErrorFromResponse(resp);
   }
   const reader = resp.body?.getReader();
   if (!reader) throw new Error("无法读取响应流");
@@ -767,8 +795,7 @@ async function postJson<T>(
 ): Promise<T> {
   const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
   if (!resp.ok) {
-    const errText = await resp.text().catch(() => "");
-    throw new Error(`API 错误 (${resp.status}): ${errText.slice(0, 400)}`);
+    throw await apiErrorFromResponse(resp);
   }
   const json = (await resp.json()) as Record<string, unknown>;
   return pick(json);

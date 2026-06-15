@@ -55,8 +55,8 @@ export function createBook(seed?: Partial<BookProject>): BookProject {
 
 export function defaultLibrary(): LibraryState {
   const starter = createBook({
-    title: "Personal Workspace",
-    description: "织梦写作台默认工作区；LumenOS 负责底层 Agent 运行层。",
+    title: "织梦默认工作区",
+    description: "织梦写作台默认工作区；用于管理 AI 对话、写作项目、上下文和文件草案。",
     type: "Writing Agent",
     cover: "◇",
   });

@@ -268,6 +268,8 @@ export function AIChatPanel({
   const [input, setInput] = useState("");
   const [streamText, setStreamText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+  const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
   const [approvalDrafts, setApprovalDrafts] = useState<ApprovalDraft[]>([]);
   const [bridgeRequests, setBridgeRequests] = useState<ExecutorBridgeRequest[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRunRecord[]>([]);
@@ -320,6 +322,24 @@ export function AIChatPanel({
     const editorLength = workspace.includeEditorContext ? htmlToPlainText(selectedFile?.content || "").length : 0;
     return associatedLength + editorLength;
   }, [associatedFiles, selectedFile?.content, workspace.includeEditorContext]);
+  const runtimeSnapshotCount =
+    agentRuns.length +
+    workflowSnapshots.length +
+    kairosSnapshots.length +
+    schedulerSnapshots.length +
+    workerSnapshots.length +
+    providerSnapshots.length +
+    memorySnapshots.length +
+    skillSnapshots.length +
+    sandboxSnapshots.length +
+    phaseAuditSnapshots.length +
+    sourceAuditSnapshots.length +
+    goalBootstrapSnapshots.length +
+    userModelSnapshots.length +
+    subagentSnapshots.length;
+  const pendingApprovalCount = approvalDrafts.filter((draft) => draft.status === "draft").length;
+  const pendingBridgeCount = bridgeRequests.filter((request) => request.status !== "rejected" && request.status !== "completed").length;
+  const hasRuntimeDetails = runtimeSnapshotCount > 0 || pendingApprovalCount > 0 || pendingBridgeCount > 0;
   const currentPlainText = useMemo(() => htmlToPlainText(selectedFile?.content || ""), [selectedFile?.content]);
   const agentPreview = useMemo(() => {
     const raw = input || "请根据当前项目状态辅助我继续创作。";
@@ -1449,7 +1469,7 @@ export function AIChatPanel({
       action: "evolution_bootstrap",
       purpose: "验收 Phase 5 Evolution：KAIROS、scheduler 草案、AutoDream、Skill 结晶和用户模型",
       payload: {
-        objective: input || currentPlainText.slice(-600) || "继续建设灵枢 LumenOS Personal Agent OS：长期自治、记忆压缩、技能进化和安全写回；织梦作为内置写作域。",
+        objective: input || currentPlainText.slice(-600) || "继续建设织梦写作台的 Agent Workbench：灵枢 LumenOS 提供底层记忆、Skills、工具、审批和长期运行能力。",
         workflow_id: `workflow-evolution-${workflowDagPreview.id}`,
         interval_minutes: 5,
         activate_skill: true,
@@ -1498,7 +1518,7 @@ export function AIChatPanel({
           ? "取消最近一个后台 Worker 任务"
           : action === "worker_merge_proposal"
             ? "把最近 Worker 输出转成可审查合并草案"
-            : "查询后台 Worker 状态",
+            : "查询后台任务状态",
       payload: action === "worker_run"
         ? {
             job_id: `worker-${Date.now()}`,
@@ -1589,14 +1609,14 @@ export function AIChatPanel({
       manifest: executorBridgePreview,
       action,
       purpose: action === "provider_catalog"
-        ? "读取 Gateway 多模型 Provider 预设库"
+        ? "读取 Gateway 多模型接口预设库"
         : action === "provider_status"
-          ? "检查当前 API Provider 配置、密钥需求和模型 Worker 就绪度"
-          : "受控探测当前 Provider 模型列表端点",
+          ? "检查当前模型接口配置、密钥需求和任务运行状态"
+          : "受控探测当前模型接口列表端点",
       payload,
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
-    showToast("已生成 Provider 执行桥请求", "info");
+    showToast("已生成模型接口请求", "info");
   };
 
   const createMemoryBridgeRequest = (action: Extract<ExecutorActionKind, "memory_status" | "memory_retrieve" | "memory_bootstrap" | "memory_consolidate">) => {
@@ -1610,7 +1630,7 @@ export function AIChatPanel({
           }
         : action === "memory_bootstrap"
           ? {
-              goal: input || "继续建设灵枢 LumenOS Personal Agent OS：长期记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 自治；织梦作为内置写作域。",
+              goal: input || "继续建设织梦写作台的 Agent Workbench：长期记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 自治由 LumenOS 底层承载。",
               query: input || "Personal OS 长期记忆",
               limit: 6,
             }
@@ -1709,12 +1729,12 @@ export function AIChatPanel({
         : action === "skill_crystallize"
         ? "从 AutoDream L2 记忆结晶 Skill 草案"
         : action === "skill_review"
-          ? "审查 Gateway Skill 草案"
+          ? "审查 Gateway 技能草案"
           : action === "skill_activate"
-            ? "激活已审查的 Gateway Skill 草案"
+            ? "激活已审查的 Gateway 技能草案"
             : action === "skill_run"
-              ? "运行已激活 Gateway Skill（需要 execute-skill 权限）"
-            : "查询 Gateway Skill 结晶状态",
+              ? "运行已激活 Gateway 技能（需要 execute-skill 权限）"
+            : "查询 Gateway 技能结晶状态",
       payload: skillPayload,
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
@@ -1814,13 +1834,13 @@ export function AIChatPanel({
   };
 
   const createWebFetchBridgeRequest = () => {
-    const url = window.prompt("输入 API/网页 URL", "http://127.0.0.1:8765/health");
+    const url = window.prompt("输入接口或网页地址", "http://127.0.0.1:8765/health");
     if (!url?.trim()) return;
     const allowPrivate = /^https?:\/\/(127\.|localhost|10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.)/i.test(url.trim());
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "web_fetch",
-      purpose: `受控 API Fetch：${url.trim()}`,
+      purpose: `受控读取网页：${url.trim()}`,
       payload: {
         url: url.trim(),
         method: "GET",
@@ -1831,7 +1851,7 @@ export function AIChatPanel({
       },
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
-    showToast("已生成 API Fetch 请求", "info");
+    showToast("已生成网页读取请求", "info");
   };
 
   const createMcpCallBridgeRequest = () => {
@@ -1898,7 +1918,7 @@ export function AIChatPanel({
       payload: {},
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
-    showToast("已生成 Phase 审计执行桥请求", "info");
+    showToast("已生成阶段审计执行桥请求", "info");
   };
 
   const createCompletionAuditBridgeRequest = () => {
@@ -1931,7 +1951,7 @@ export function AIChatPanel({
       },
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
-    showToast("已生成 Source Audit 执行桥请求", "info");
+    showToast("已生成来源审计执行桥请求", "info");
   };
 
   const createSourceDigestBridgeRequest = () => {
@@ -1959,7 +1979,7 @@ export function AIChatPanel({
   };
 
   const createGoalBootstrapBridgeRequest = () => {
-    const goal = input.trim() || "继续建设灵枢 LumenOS Personal Agent OS：以多工作区、上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治为顶层能力，织梦作为内置写作 Agent。";
+    const goal = input.trim() || "继续建设织梦写作台 / Zhimeng Writing Agent：以写作主场为公开入口，以灵枢 LumenOS 承载多工作区、上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治。";
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "goal_bootstrap",
@@ -1983,7 +2003,7 @@ export function AIChatPanel({
       },
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
-    showToast("已生成 Goal Mode 执行桥请求", "info");
+    showToast("已生成目标模式执行桥请求", "info");
   };
 
   const createUserModelBridgeRequest = (action: Extract<ExecutorActionKind, "user_model_event" | "user_model_reflect" | "user_model_status">) => {
@@ -2275,18 +2295,18 @@ export function AIChatPanel({
               <span className={bridgeRequests.some((request) => request.status === "draft") ? "text-blue-300" : "text-slate-500"}>桥请求 {bridgeRequests.filter((request) => request.status === "draft").length}</span>
               <span className="text-cyan-300">DAG {workflowDagPreview.nodes.length}</span>
               <span className={agentRuns.length ? "text-emerald-300" : "text-slate-500"}>运行 {agentRuns.length}</span>
-              <span className={workflowSnapshots.length ? "text-cyan-300" : "text-slate-500"}>WF {workflowSnapshots.length}</span>
+              <span className={workflowSnapshots.length ? "text-cyan-300" : "text-slate-500"}>流程 {workflowSnapshots.length}</span>
               <span className={kairosSnapshots.length ? "text-fuchsia-300" : "text-slate-500"}>KAIROS {kairosSnapshots.length}</span>
-              <span className={schedulerSnapshots.length ? "text-orange-300" : "text-slate-500"}>SCH {schedulerSnapshots.length}</span>
-              <span className={workerSnapshots.length ? "text-sky-300" : "text-slate-500"}>WK {workerSnapshots.length}</span>
-              <span className={providerSnapshots.length ? "text-indigo-300" : "text-slate-500"}>API {providerSnapshots.length}</span>
-              <span className={memorySnapshots.length ? "text-emerald-300" : "text-slate-500"}>MEM {memorySnapshots.length}</span>
-              <span className={skillSnapshots.length ? "text-purple-300" : "text-slate-500"}>SKL {skillSnapshots.length}</span>
-              <span className={sandboxSnapshots.length ? "text-amber-300" : "text-slate-500"}>SBX {sandboxSnapshots.length}</span>
-              <span className={phaseAuditSnapshots.length ? "text-lime-300" : "text-slate-500"}>PH {phaseAuditSnapshots.length}</span>
-              <span className={userModelSnapshots.length ? "text-pink-300" : "text-slate-500"}>UM {userModelSnapshots.length}</span>
+              <span className={schedulerSnapshots.length ? "text-orange-300" : "text-slate-500"}>定时 {schedulerSnapshots.length}</span>
+              <span className={workerSnapshots.length ? "text-sky-300" : "text-slate-500"}>任务 {workerSnapshots.length}</span>
+              <span className={providerSnapshots.length ? "text-indigo-300" : "text-slate-500"}>接口 {providerSnapshots.length}</span>
+              <span className={memorySnapshots.length ? "text-emerald-300" : "text-slate-500"}>记忆 {memorySnapshots.length}</span>
+              <span className={skillSnapshots.length ? "text-purple-300" : "text-slate-500"}>技能 {skillSnapshots.length}</span>
+              <span className={sandboxSnapshots.length ? "text-amber-300" : "text-slate-500"}>沙盒 {sandboxSnapshots.length}</span>
+              <span className={phaseAuditSnapshots.length ? "text-lime-300" : "text-slate-500"}>阶段 {phaseAuditSnapshots.length}</span>
+              <span className={userModelSnapshots.length ? "text-pink-300" : "text-slate-500"}>画像 {userModelSnapshots.length}</span>
               <span className={subagentSnapshots.length ? "text-blue-300" : "text-slate-500"}>AG {subagentSnapshots.length}</span>
-              <span className="text-indigo-300">ARCH {agentArchitecturePreview.sources.length}</span>
+              <span className="text-indigo-300">架构 {agentArchitecturePreview.sources.length}</span>
               <span className={skillAssemblyPreview.activeCoreSkills.length ? "text-fuchsia-300" : "text-slate-500"}>核心Skill {skillAssemblyPreview.activeCoreSkills.length}</span>
               <span className={swarmPlanPreview.conflicts.length ? "text-red-300" : "text-blue-300"}>子代理 {swarmPlanPreview.agents.length}</span>
               <span className={rawContextChars > MAX_EDITOR_CONTEXT_CHARS ? "text-amber-300" : "text-slate-500"}>{Math.round(rawContextChars / 1000)}k</span>
@@ -2299,7 +2319,7 @@ export function AIChatPanel({
                 风险 {personalOSPreview.risk}
               </span>
               <span className="rounded-lg bg-slate-800 px-2 py-1 text-slate-400">意图 {agentPreview.plan.intent}</span>
-              <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">Pack {agentContextPackPreview.budget.mode}</span>
+              <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">上下文 {agentContextPackPreview.budget.mode}</span>
               <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">队列 {agentContextPackPreview.bridgeQueue.length}</span>
               <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">AutoDream L1/L2</span>
               <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">工作流 {workflowDagPreview.currentNodeId}</span>
@@ -2307,7 +2327,7 @@ export function AIChatPanel({
               <span className="rounded-lg bg-red-500/10 px-2 py-1 text-red-300">命令验证 {COMMAND_VALIDATORS.length}</span>
               <span className="rounded-lg bg-blue-500/10 px-2 py-1 text-blue-300">写锁 {swarmPlanPreview.locks.filter((lock) => lock.mode === "write").length}</span>
               <span className="rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300">MCP Bridge</span>
-              <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">Provider Hub</span>
+              <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">接口中枢</span>
               <span className="rounded-lg bg-purple-500/10 px-2 py-1 text-purple-300">审批协议</span>
               <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">架构镜像 {agentArchitecturePreview.layers.filter((layer) => layer.status === "absorbed").length}/{agentArchitecturePreview.layers.length}</span>
               {(personalOSPreview.goalMode || personalOSPreview.domain === "automation") && (
@@ -2388,64 +2408,19 @@ export function AIChatPanel({
                 模型Worker
               </button>
               <button onClick={() => createProviderBridgeRequest("provider_catalog")} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">
-                Provider库
+                接口库
               </button>
               <button onClick={() => createProviderBridgeRequest("provider_status")} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">
-                API状态
+                接口状态
               </button>
               <button onClick={() => createProviderBridgeRequest("provider_probe")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
-                API探测
-              </button>
-              <button onClick={() => createWorkerBridgeRequest("worker_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                Worker状态
-              </button>
-              <button onClick={() => createWorkerBridgeRequest("worker_merge_proposal")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">
-                合并草案
-              </button>
-              <button onClick={() => createWorkerBridgeRequest("worker_cancel")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">
-                取消Worker
-              </button>
-              <button onClick={() => createMemoryBridgeRequest("memory_status")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">
-                记忆状态
-              </button>
-              <button onClick={() => createMemoryBridgeRequest("memory_retrieve")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">
-                检索记忆
-              </button>
-              <button onClick={() => createMemoryBridgeRequest("memory_bootstrap")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">
-                记忆验收
+                模型探针
               </button>
               <button onClick={createContextPackBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">
-                生成Pack
-              </button>
-              <button onClick={() => createMemoryBridgeRequest("memory_consolidate")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
-                压缩记忆
+                生成上下文
               </button>
               <button onClick={() => createSkillBridgeRequest("skill_route")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">
                 路由技能
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_invoke")} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">
-                调用技能
-              </button>
-              <button onClick={createLocalSkillInvokeBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">
-                本地Skill
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_bootstrap")} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">
-                技能验收
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_crystallize")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">
-                技能结晶
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                技能状态
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_review")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">
-                审查技能
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_activate")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">
-                激活技能
-              </button>
-              <button onClick={() => createSkillBridgeRequest("skill_run")} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">
-                运行技能
               </button>
               <button onClick={() => createFileToolBridgeRequest("read_file")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
                 读文件
@@ -2465,68 +2440,75 @@ export function AIChatPanel({
               <button onClick={createCommandBridgeRequest} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
                 验证命令
               </button>
-              <button onClick={createWebFetchBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">
-                API Fetch
-              </button>
-              <button onClick={createMcpCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">
-                MCP Call
-              </button>
-              <button onClick={createMcpStdioCatalogBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">
-                MCP目录
-              </button>
-              <button onClick={createMcpStdioCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">
-                内置MCP
-              </button>
-              <button onClick={() => createSandboxBridgeRequest("sandbox_probe")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
-                沙盒探针
-              </button>
-              <button onClick={() => createSandboxBridgeRequest("sandbox_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                沙盒状态
-              </button>
-              <button onClick={createPhaseAuditBridgeRequest} className="rounded-lg bg-lime-500/10 px-2 py-1 text-[10px] text-lime-300 hover:bg-lime-500/20">
-                阶段审计
-              </button>
-              <button onClick={createCompletionAuditBridgeRequest} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">
-                总验收
-              </button>
-              <button onClick={createSourceAuditBridgeRequest} className="rounded-lg bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-500/20">
-                来源审计
-              </button>
-              <button onClick={createSourceDigestBridgeRequest} className="rounded-lg bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-500/20">
-                吸收蓝图
-              </button>
-              <button onClick={createGoalBootstrapBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">
-                目标模式
-              </button>
-              <button onClick={() => createUserModelBridgeRequest("user_model_event")} className="rounded-lg bg-pink-500/10 px-2 py-1 text-[10px] text-pink-300 hover:bg-pink-500/20">
-                用户建模
-              </button>
-              <button onClick={() => createUserModelBridgeRequest("user_model_reflect")} className="rounded-lg bg-pink-500/10 px-2 py-1 text-[10px] text-pink-300 hover:bg-pink-500/20">
-                模型反思
-              </button>
-              <button onClick={() => createUserModelBridgeRequest("user_model_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                用户模型
-              </button>
-              <button onClick={() => createSubagentBridgeRequest("subagent_spawn")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
-                登记代理
-              </button>
-              <button onClick={() => createSubagentBridgeRequest("lock_acquire")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">
-                申请写锁
-              </button>
-              <button onClick={() => createSubagentBridgeRequest("swarm_bootstrap")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
-                Swarm验收
-              </button>
-              <button onClick={() => createSubagentBridgeRequest("subagent_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                代理状态
-              </button>
               <button onClick={onSaveHistory} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">保存对话</button>
               <button onClick={onOpenHistory} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">历史</button>
+              <button
+                onClick={() => setShowAdvancedTools((prev) => !prev)}
+                className={`rounded-lg px-2 py-1 text-[10px] ${showAdvancedTools ? "bg-indigo-500/20 text-indigo-200" : "bg-slate-800 text-slate-400 hover:bg-slate-700"}`}
+              >
+                更多工具
+              </button>
             </div>
+            {showAdvancedTools && (
+              <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-800 pt-2">
+                <button onClick={() => createWorkerBridgeRequest("worker_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">任务状态</button>
+                <button onClick={() => createWorkerBridgeRequest("worker_merge_proposal")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">合并草案</button>
+                <button onClick={() => createWorkerBridgeRequest("worker_cancel")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">取消任务</button>
+                <button onClick={() => createMemoryBridgeRequest("memory_status")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">记忆状态</button>
+                <button onClick={() => createMemoryBridgeRequest("memory_retrieve")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">检索记忆</button>
+                <button onClick={() => createMemoryBridgeRequest("memory_bootstrap")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">记忆验收</button>
+                <button onClick={() => createMemoryBridgeRequest("memory_consolidate")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">压缩记忆</button>
+                <button onClick={() => createSkillBridgeRequest("skill_invoke")} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">调用技能</button>
+                <button onClick={createLocalSkillInvokeBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">本地Skill</button>
+                <button onClick={() => createSkillBridgeRequest("skill_bootstrap")} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">技能验收</button>
+                <button onClick={() => createSkillBridgeRequest("skill_crystallize")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">技能结晶</button>
+                <button onClick={() => createSkillBridgeRequest("skill_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">技能状态</button>
+                <button onClick={() => createSkillBridgeRequest("skill_review")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">审查技能</button>
+                <button onClick={() => createSkillBridgeRequest("skill_activate")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">激活技能</button>
+                <button onClick={() => createSkillBridgeRequest("skill_run")} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">运行技能</button>
+                <button onClick={createWebFetchBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">读取网页</button>
+                <button onClick={createMcpCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">MCP Call</button>
+                <button onClick={createMcpStdioCatalogBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">工具目录</button>
+                <button onClick={createMcpStdioCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">本地工具</button>
+                <button onClick={() => createSandboxBridgeRequest("sandbox_probe")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">沙盒探针</button>
+                <button onClick={() => createSandboxBridgeRequest("sandbox_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">沙盒状态</button>
+                <button onClick={createPhaseAuditBridgeRequest} className="rounded-lg bg-lime-500/10 px-2 py-1 text-[10px] text-lime-300 hover:bg-lime-500/20">阶段审计</button>
+                <button onClick={createCompletionAuditBridgeRequest} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">总验收</button>
+                <button onClick={createSourceAuditBridgeRequest} className="rounded-lg bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-500/20">来源审计</button>
+                <button onClick={createSourceDigestBridgeRequest} className="rounded-lg bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-500/20">吸收蓝图</button>
+                <button onClick={createGoalBootstrapBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">目标模式</button>
+                <button onClick={() => createUserModelBridgeRequest("user_model_event")} className="rounded-lg bg-pink-500/10 px-2 py-1 text-[10px] text-pink-300 hover:bg-pink-500/20">用户建模</button>
+                <button onClick={() => createUserModelBridgeRequest("user_model_reflect")} className="rounded-lg bg-pink-500/10 px-2 py-1 text-[10px] text-pink-300 hover:bg-pink-500/20">模型反思</button>
+                <button onClick={() => createUserModelBridgeRequest("user_model_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">用户模型</button>
+                <button onClick={() => createSubagentBridgeRequest("subagent_spawn")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">登记代理</button>
+                <button onClick={() => createSubagentBridgeRequest("lock_acquire")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">申请写锁</button>
+                <button onClick={() => createSubagentBridgeRequest("swarm_bootstrap")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">Swarm验收</button>
+                <button onClick={() => createSubagentBridgeRequest("subagent_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">代理状态</button>
+              </div>
+            )}
           </div>
+          {hasRuntimeDetails && (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/45 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => setShowRuntimeDetails((prev) => !prev)}
+                className="flex w-full items-center justify-between gap-3 text-left"
+              >
+                <span className="min-w-0 truncate text-[11px] font-medium text-slate-200">
+                  运行详情
+                </span>
+                <span className="shrink-0 text-[10px] text-slate-500">
+                  记录 {runtimeSnapshotCount} · 审批 {pendingApprovalCount} · 请求 {pendingBridgeCount} · {showRuntimeDetails ? "收起" : "展开"}
+                </span>
+              </button>
+            </div>
+          )}
+          {showRuntimeDetails && (
+            <>
           {agentRuns.length > 0 && (
             <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-cyan-300">
-                <span>AgentRun 时间线</span>
+                <span>运行时间线</span>
                 <span>{agentRuns.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2556,7 +2538,7 @@ export function AIChatPanel({
           {workflowSnapshots.length > 0 && (
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-emerald-300">
-                <span>Workflow 状态</span>
+                <span>流程状态</span>
                 <span>{workflowSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2604,7 +2586,7 @@ export function AIChatPanel({
           {schedulerSnapshots.length > 0 && (
             <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-orange-300">
-                <span>Scheduler 草案</span>
+                <span>定时草案</span>
                 <span>{schedulerSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2632,7 +2614,7 @@ export function AIChatPanel({
           {workerSnapshots.length > 0 && (
             <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-sky-300">
-                <span>Worker 状态</span>
+                <span>任务状态</span>
                 <span>{workerSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2659,7 +2641,7 @@ export function AIChatPanel({
           {providerSnapshots.length > 0 && (
             <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-indigo-300">
-                <span>Provider Hub</span>
+                <span>接口中枢</span>
                 <span>{providerSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2692,7 +2674,7 @@ export function AIChatPanel({
           {memorySnapshots.length > 0 && (
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-emerald-300">
-                <span>Gateway Memory</span>
+                <span>记忆状态</span>
                 <span>{memorySnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2717,7 +2699,7 @@ export function AIChatPanel({
           {skillSnapshots.length > 0 && (
             <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-purple-300">
-                <span>Gateway Skill</span>
+                <span>技能状态</span>
                 <span>{skillSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2752,7 +2734,7 @@ export function AIChatPanel({
           {sandboxSnapshots.length > 0 && (
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-amber-300">
-                <span>Sandbox 状态</span>
+                <span>沙盒状态</span>
                 <button onClick={() => void refreshGatewayRuntime()} className="rounded bg-slate-900 px-1.5 py-0.5 text-amber-200 hover:bg-slate-800">{sandboxSnapshots.length} 条</button>
               </div>
               <div className="space-y-2">
@@ -2793,7 +2775,7 @@ export function AIChatPanel({
           {phaseAuditSnapshots.length > 0 && (
             <div className="rounded-xl border border-lime-500/20 bg-lime-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-lime-300">
-                <span>Phase 审计</span>
+                <span>阶段审计</span>
                 <span>{phaseAuditSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2828,7 +2810,7 @@ export function AIChatPanel({
           {sourceAuditSnapshots.length > 0 && (
             <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-rose-300">
-                <span>Source Audit</span>
+                <span>来源审计</span>
                 <span>{sourceAuditSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2855,7 +2837,7 @@ export function AIChatPanel({
           {goalBootstrapSnapshots.length > 0 && (
             <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-cyan-300">
-                <span>Goal Mode</span>
+                <span>目标模式</span>
                 <span>{goalBootstrapSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2870,7 +2852,7 @@ export function AIChatPanel({
                       <span className="rounded bg-slate-900 px-1.5 py-0.5">P1任务 {snapshot.phase1TaskCount}</span>
                       <span className="rounded bg-slate-900 px-1.5 py-0.5">节点 {snapshot.workflowNodeCount}</span>
                       <span className="rounded bg-slate-900 px-1.5 py-0.5">代理 {snapshot.subagentCount}</span>
-                      <span className="rounded bg-slate-900 px-1.5 py-0.5">Worker {snapshot.workerCount}</span>
+                      <span className="rounded bg-slate-900 px-1.5 py-0.5">任务 {snapshot.workerCount}</span>
                       <span className="rounded bg-slate-900 px-1.5 py-0.5">安全源 {snapshot.safeSourceCount}</span>
                       <span className={snapshot.blockedSourceCount ? "rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-300" : "rounded bg-slate-900 px-1.5 py-0.5"}>阻断源 {snapshot.blockedSourceCount}</span>
                     </div>
@@ -2886,7 +2868,7 @@ export function AIChatPanel({
           {userModelSnapshots.length > 0 && (
             <div className="rounded-xl border border-pink-500/20 bg-pink-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-pink-300">
-                <span>Honcho 用户模型</span>
+                <span>用户画像</span>
                 <span>{userModelSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -2911,7 +2893,7 @@ export function AIChatPanel({
           {subagentSnapshots.length > 0 && (
             <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2">
               <div className="mb-2 flex items-center justify-between text-[10px] text-blue-300">
-                <span>Subagent 状态</span>
+                <span>子代理状态</span>
                 <span>{subagentSnapshots.length} 条</span>
               </div>
               <div className="space-y-2">
@@ -3001,6 +2983,8 @@ export function AIChatPanel({
                 ))}
               </div>
             </div>
+          )}
+            </>
           )}
           <div className="relative">
             <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="输入指令..." className="w-full h-20 resize-none rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-indigo-500 transition-colors" />

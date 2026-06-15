@@ -35,6 +35,7 @@ bridge/*-test.err
 
 # Logs
 *.log
+.codex-devserver.*
 npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
