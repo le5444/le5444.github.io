@@ -68,11 +68,13 @@ npm run dev
 npm run build
 ```
 
-构建 GitHub Pages / PWA 版本：
+构建 GitHub Pages 版本：
 
 ```bash
 npm run build:pwa
 ```
+
+> 当前线上版本会主动注销旧 Service Worker 并清理旧缓存，避免浏览器继续显示历史 PWA 里的旧界面。
 
 启动本地 Bridge：
 
@@ -114,7 +116,7 @@ docs/                 路线图、截图和项目说明
 这个仓库同时承担源码保存和 GitHub Pages 部署：
 
 - `source`：完整源码、文档、Bridge、桌面启动器和 Skills。日常开发和开源阅读看这个分支。
-- `main`：GitHub Pages 静态产物，来自 `dist-pwa/`，用于线上访问 [le5444.github.io](https://le5444.github.io/)。
+- `main`：GitHub Pages 静态产物，来自 `dist-pwa/`，用于线上访问 [le5444.github.io](https://le5444.github.io/)；其中 `sw.js` 只用于退役旧缓存，不再把页面离线固定住。
 
 保留 `source` 分支是为了让已有链接继续有效：
 

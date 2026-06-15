@@ -75,7 +75,7 @@ export function classifyAutoDreamDimension(text: string, source = ""): AutoDream
   if (/偏好|喜欢|以后|长期|习惯|风格/i.test(haystack)) return "preference";
   if (/skill|技能|挂载|路由|prompt/i.test(haystack)) return "skill";
   if (/工具|tool|命令|shell|浏览器|mcp|验证|构建/i.test(haystack)) return "tool";
-  if (/项目|目标|阶段|里程碑|验收|Personal OS|KAIROS|AutoDream/i.test(haystack)) return "project";
+  if (/项目|目标|阶段|里程碑|验收|Agent Workbench|KAIROS|AutoDream/i.test(haystack)) return "project";
   return "episode";
 }
 

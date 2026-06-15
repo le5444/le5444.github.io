@@ -11,7 +11,8 @@ const __dirname = path.dirname(__filename);
 
 // 双构建：
 //  - `vite build`            → 单文件 HTML（dist/index.html，可双击运行）
-//  - `vite build --mode pwa` → PWA 多文件 + manifest + service worker（dist-pwa/，可装到手机主屏离线运行）
+//  - `vite build --mode pwa` → GitHub Pages 多文件版本（dist-pwa/）。
+//    旧版曾注册 Service Worker；现在 sw.js 只负责注销旧缓存，避免线上页面卡在旧 UI。
 export default defineConfig(({ mode }) => {
   const isPwa = mode === "pwa";
 
@@ -24,6 +25,8 @@ export default defineConfig(({ mode }) => {
         ? [
             VitePWA({
               registerType: "autoUpdate",
+              injectRegister: false,
+              selfDestroying: true,
               includeAssets: ["icon.svg", "icon-192.png", "icon-512.png", "icon-512-maskable.png"],
               manifest: {
                 name: "织梦写作台 / Zhimeng Writing Agent",

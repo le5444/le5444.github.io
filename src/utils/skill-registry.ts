@@ -66,8 +66,8 @@ export const CORE_CODEX_NOVEL_SKILLS: CoreSkillSpec[] = [
 
 export const GENERAL_PERSONAL_OS_SKILLS: CoreSkillSpec[] = [
   {
-    key: "personal-os-coordinator",
-    label: "Personal OS 总编排",
+    key: "zhimeng-workbench-coordinator",
+    label: "织梦工作台总编排",
     scope: "global",
     source: "built-in",
     purpose: "统筹记忆、工具、技能、验收、写回和长期任务。",

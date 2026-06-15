@@ -983,7 +983,7 @@ export function AIChatPanel({
       return {
         id: `completion-audit-${action}`,
         action,
-        title: "Personal OS 总验收",
+        title: "织梦工作台总验收",
         overall: String(completion.status || "unknown"),
         pass: Number(summary.proven || 0),
         partial: Number(summary.partial || 0),
@@ -1012,7 +1012,7 @@ export function AIChatPanel({
     return {
       id: `phase-audit-${action}`,
       action,
-      title: "Personal OS Phase 1-5",
+      title: "织梦 Phase 1-5",
       overall: String(audit.status || "unknown"),
       pass: Number(summary.pass || 0),
       partial: Number(summary.partial || 0),
@@ -1247,14 +1247,14 @@ export function AIChatPanel({
     if (!events.length) return;
     const at = Date.now();
     onWorkspaceChange((prev) => {
-      const categories = Array.from(new Set(["个人OS", ...prev.categories]));
-      const memoryIndex = prev.files.findIndex((file) => file.category === "个人OS" && /MEMORY/i.test(file.title));
+      const categories = Array.from(new Set(["织梦工作台", ...prev.categories.filter((category) => category !== "个人OS")]));
+      const memoryIndex = prev.files.findIndex((file) => ["织梦工作台", "个人OS"].includes(file.category) && /MEMORY/i.test(file.title));
       if (memoryIndex >= 0) {
         const files = prev.files.map((file, index) => index === memoryIndex
           ? {
               ...file,
               content: appendAutoDreamMarkdown(file.content, { events, at }),
-              summary: "Personal OS L1/L2 记忆索引，含 AutoDream 工具观察。",
+              summary: "织梦 L1/L2 记忆索引，含 AutoDream 工具观察。",
               updatedAt: at,
             }
           : file);
@@ -1267,10 +1267,10 @@ export function AIChatPanel({
           ...prev.files,
           {
             id: uid(),
-            category: "个人OS",
+            category: "织梦工作台",
             title: "MEMORY.md",
             content: appendAutoDreamMarkdown("", { events, at }),
-            summary: "Personal OS L1/L2 记忆索引，含 AutoDream 工具观察。",
+            summary: "织梦 L1/L2 记忆索引，含 AutoDream 工具观察。",
             updatedAt: at,
           },
         ],
@@ -1288,18 +1288,18 @@ export function AIChatPanel({
       at,
     });
     const logs = [
-      createKairosLog(task, "created", "Personal OS 将本轮目标登记为 KAIROS 草案。", at),
+      createKairosLog(task, "created", "织梦工作台将本轮目标登记为 KAIROS 草案。", at),
       createKairosLog(task, run.status === "completed" ? "observed" : "paused", run.responsePreview || run.error || "等待下一步观察。", at),
     ];
     onWorkspaceChange((prev) => {
-      const categories = Array.from(new Set(["个人OS", ...prev.categories]));
-      const kairosIndex = prev.files.findIndex((file) => file.category === "个人OS" && /KAIROS/i.test(file.title));
+      const categories = Array.from(new Set(["织梦工作台", ...prev.categories.filter((category) => category !== "个人OS")]));
+      const kairosIndex = prev.files.findIndex((file) => ["织梦工作台", "个人OS"].includes(file.category) && /KAIROS/i.test(file.title));
       if (kairosIndex >= 0) {
         const files = prev.files.map((file, index) => index === kairosIndex
           ? {
               ...file,
               content: appendKairosMarkdown(file.content, { task, logs, at }),
-              summary: "Personal OS 长期任务队列与 append-only 日志。",
+              summary: "织梦长期任务队列与 append-only 日志。",
               updatedAt: at,
             }
           : file);
@@ -1312,10 +1312,10 @@ export function AIChatPanel({
           ...prev.files,
           {
             id: uid(),
-            category: "个人OS",
+            category: "织梦工作台",
             title: "KAIROS.md",
             content: appendKairosMarkdown("", { task, logs, at }),
-            summary: "Personal OS 长期任务队列与 append-only 日志。",
+            summary: "织梦长期任务队列与 append-only 日志。",
             updatedAt: at,
           },
         ],
@@ -1368,14 +1368,14 @@ export function AIChatPanel({
     const at = Date.now();
     const entry = `\n\n---\n\n${renderExecutorBridgeRequestMarkdown(request)}`;
     onWorkspaceChange((prev) => {
-      const categories = Array.from(new Set(["个人OS", ...prev.categories]));
-      const bridgeIndex = prev.files.findIndex((file) => file.category === "个人OS" && /BRIDGE/i.test(file.title));
+      const categories = Array.from(new Set(["织梦工作台", ...prev.categories.filter((category) => category !== "个人OS")]));
+      const bridgeIndex = prev.files.findIndex((file) => ["织梦工作台", "个人OS"].includes(file.category) && /BRIDGE/i.test(file.title));
       if (bridgeIndex >= 0) {
         const files = prev.files.map((file, index) => index === bridgeIndex
           ? {
               ...file,
               content: `${file.content.trim()}${entry}`.trim(),
-              summary: "Personal OS 本地执行器/MCP 桥配置与请求日志。",
+              summary: "织梦本地执行器/MCP 桥配置与请求日志。",
               updatedAt: at,
             }
           : file);
@@ -1388,10 +1388,10 @@ export function AIChatPanel({
           ...prev.files,
           {
             id: uid(),
-            category: "个人OS",
+            category: "织梦工作台",
             title: "BRIDGE.md",
             content: renderExecutorBridgeRequestMarkdown(request),
-            summary: "Personal OS 本地执行器/MCP 桥配置与请求日志。",
+            summary: "织梦本地执行器/MCP 桥配置与请求日志。",
             updatedAt: at,
           },
         ],
@@ -1469,7 +1469,7 @@ export function AIChatPanel({
       action: "evolution_bootstrap",
       purpose: "验收 Phase 5 Evolution：KAIROS、scheduler 草案、AutoDream、Skill 结晶和用户模型",
       payload: {
-        objective: input || currentPlainText.slice(-600) || "继续建设织梦写作台的 Agent Workbench：灵枢 LumenOS 提供底层记忆、Skills、工具、审批和长期运行能力。",
+        objective: input || currentPlainText.slice(-600) || "继续建设织梦写作台的 Agent Workbench：打通底层记忆、Skills、工具、审批和长期运行能力。",
         workflow_id: `workflow-evolution-${workflowDagPreview.id}`,
         interval_minutes: 5,
         activate_skill: true,
@@ -1526,8 +1526,8 @@ export function AIChatPanel({
             kind: "bridge_action",
             action: "context_pack",
             payload: {
-              task: input || currentPlainText.slice(-600) || "Personal OS",
-              query: input || currentPlainText.slice(-600) || "Personal OS",
+              task: input || currentPlainText.slice(-600) || "织梦 AI 工作台",
+              query: input || currentPlainText.slice(-600) || "织梦 AI 工作台",
               domain: personalOSPreview.domain,
               dimension: personalOSPreview.domain === "writing" ? "skill" : personalOSPreview.domain === "coding" ? "tool" : "project",
               limit: agentContextPackPreview.budget.memoryShardLimit,
@@ -1551,7 +1551,7 @@ export function AIChatPanel({
   };
 
   const createModelWorkerBridgeRequest = () => {
-    const task = input || currentPlainText.slice(-800) || "Personal OS model worker rehearsal";
+    const task = input || currentPlainText.slice(-800) || "织梦模型 Worker 演练";
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "worker_run",
@@ -1624,14 +1624,14 @@ export function AIChatPanel({
       ? {}
       : action === "memory_retrieve"
         ? {
-            query: input || currentPlainText.slice(-600) || "Personal OS",
+            query: input || currentPlainText.slice(-600) || "织梦 AI 工作台",
             dimension: personalOSPreview.domain === "writing" ? "project" : "tool",
             limit: 6,
           }
         : action === "memory_bootstrap"
           ? {
-              goal: input || "继续建设织梦写作台的 Agent Workbench：长期记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 自治由 LumenOS 底层承载。",
-              query: input || "Personal OS 长期记忆",
+              goal: input || "继续建设织梦写作台的 Agent Workbench：长期记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 自治协同推进。",
+              query: input || "织梦长期记忆",
               limit: 6,
             }
         : { dimension: "tool" };
@@ -1658,7 +1658,7 @@ export function AIChatPanel({
       purpose: "生成 Gateway Agent Context Pack",
       payload: {
         task: input || currentPlainText.slice(-600) || "请根据当前项目状态辅助我继续创作。",
-        query: agentContextPackPreview.task.raw || input || "Personal OS",
+        query: agentContextPackPreview.task.raw || input || "织梦 AI 工作台",
         domain: personalOSPreview.domain,
         dimension: personalOSPreview.domain === "writing" ? "skill" : personalOSPreview.domain === "coding" ? "tool" : "project",
         limit: agentContextPackPreview.budget.memoryShardLimit,
@@ -1723,7 +1723,7 @@ export function AIChatPanel({
       purpose: action === "skill_bootstrap"
         ? "验收写作领域 Skill Matrix 挂载、上下文包、工具隔离和子代理钩子"
         : action === "skill_route"
-        ? "按当前任务路由 Personal OS / 小说 Skills"
+        ? "按当前任务路由 AI 工作台 / 小说 Skills"
         : action === "skill_invoke"
         ? "生成安全 Skill 调用包"
         : action === "skill_crystallize"
@@ -1792,7 +1792,7 @@ export function AIChatPanel({
           path: currentPath,
           content: currentPlainText.trim()
             ? `${currentPlainText.trim()}\n`
-            : `Agent workspace note\n\n${input.trim() || "Personal OS file tool rehearsal"}\n`,
+            : `Agent workspace note\n\n${input.trim() || "织梦文件工具演练"}\n`,
           mode: "replace",
           execute: executeWrite,
           access_profile: accessProfile,
@@ -1914,7 +1914,7 @@ export function AIChatPanel({
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "phase_audit",
-      purpose: "审计 Personal OS Phase 1-5 完成度、证据和缺口",
+      purpose: "审计织梦 Agent Workbench Phase 1-5 完成度、证据和缺口",
       payload: {},
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
@@ -1925,7 +1925,7 @@ export function AIChatPanel({
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "completion_audit",
-      purpose: "按 Codex / Claude Code / WorkBuddy / OpenClaw / Hermes 式 Agent 架构审计 Personal OS 总完成度",
+      purpose: "按 Codex / Claude Code / WorkBuddy / OpenClaw / Hermes 式 Agent 架构审计织梦工作台总完成度",
       payload: {},
     });
     setBridgeRequests((prev) => [request, ...prev].slice(0, 10));
@@ -1958,10 +1958,10 @@ export function AIChatPanel({
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "source_digest",
-      purpose: "把安全来源提炼成 Personal OS 架构吸收蓝图",
+      purpose: "把安全来源提炼成织梦 Agent Workbench 架构吸收蓝图",
       payload: {
         persist: true,
-        goal: "把 Codex / Claude Code / WorkBuddy / OpenClaw / Hermes 的公开架构模式融合进灵枢 LumenOS Personal Agent OS。",
+        goal: "把 Codex / Claude Code / WorkBuddy / OpenClaw / Hermes 的公开架构模式融合进织梦 Agent Workbench。",
         sources: [
           { label: "OpenAI Codex 官方文档", url: "https://developers.openai.com/codex/", source_kind: "official" },
           { label: "Anthropic Claude Code 官方文档", url: "https://code.claude.com/docs/", source_kind: "official" },
@@ -1979,11 +1979,11 @@ export function AIChatPanel({
   };
 
   const createGoalBootstrapBridgeRequest = () => {
-    const goal = input.trim() || "继续建设织梦写作台 / Zhimeng Writing Agent：以写作主场为公开入口，以灵枢 LumenOS 承载多工作区、上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治。";
+    const goal = input.trim() || "继续建设织梦写作台 / Zhimeng Writing Agent：以清晰的 AI 工作台为公开入口，承载多工作区、上下文记忆、Skills、工具调动、项目管理、子代理、安全闸门和 KAIROS 长期自治。";
     const request = createExecutorBridgeRequest({
       manifest: executorBridgePreview,
       action: "goal_bootstrap",
-      purpose: "启动 Personal OS 目标模式，生成阶段规划树并登记 workflow/subagents/KAIROS 草案",
+      purpose: "启动织梦目标模式，生成阶段规划树并登记 workflow/subagents/KAIROS 草案",
       payload: {
         goal,
         persist: true,
@@ -2012,7 +2012,7 @@ export function AIChatPanel({
           dimension: "preference",
           stance: "claim",
           source: "frontend",
-          summary: input.trim() ? `用户本轮关注：${input.trim().slice(0, 180)}` : "用户希望 Personal OS 优先做可验证的长期推进。",
+          summary: input.trim() ? `用户本轮关注：${input.trim().slice(0, 180)}` : "用户希望织梦工作台优先做可验证的长期推进。",
           confidence: 0.6,
         }
       : action === "user_model_reflect"
@@ -2034,7 +2034,7 @@ export function AIChatPanel({
     const agentId = agent?.key || "coordinator";
     const payload = action === "swarm_bootstrap"
       ? {
-          task: input || currentPlainText.slice(-600) || "Personal OS Phase 4 swarm rehearsal",
+          task: input || currentPlainText.slice(-600) || "织梦 Phase 4 多 Agent 演练",
           scope: `workspace/${workflowDagPreview.currentNodeId || "current"}`,
           workflow_id: `workflow-swarm-${workflowDagPreview.id}`,
           persist: true,
@@ -2287,7 +2287,7 @@ export function AIChatPanel({
           <div className="shrink-0 border-t border-slate-800 p-3 space-y-2">
           <div className="rounded-xl border border-slate-800 bg-slate-950/45 px-3 py-2">
             <div className="mb-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
-              <span className="flex items-center gap-1.5"><Brain className="h-3 w-3" /> Personal OS</span>
+              <span className="flex items-center gap-1.5"><Brain className="h-3 w-3" /> AI 工作台</span>
               <span className={agentPreview.memories.length ? "text-cyan-300" : "text-slate-500"}>记忆 {agentPreview.memories.length}</span>
               <span className={routedSkillPreview.length ? "text-purple-300" : "text-slate-500"}>路由 {routedSkillPreview.length}</span>
               <span className={toolRoutePreview.approvalRequired ? "text-amber-300" : "text-emerald-300"}>工具 {toolRoutePreview.tools.length}</span>
@@ -2844,7 +2844,7 @@ export function AIChatPanel({
                 {goalBootstrapSnapshots.slice(0, 3).map((snapshot) => (
                   <div key={`${snapshot.id}-${snapshot.at}`} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-[10px] text-slate-400">
                     <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate text-cyan-200">{snapshot.objective || "Personal OS 目标模式"}</span>
+                      <span className="min-w-0 truncate text-cyan-200">{snapshot.objective || "织梦目标模式"}</span>
                       <span className={snapshot.blockedSourceCount ? "text-amber-300" : "text-emerald-300"}>{snapshot.action}</span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">

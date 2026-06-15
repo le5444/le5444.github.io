@@ -7,7 +7,7 @@ export const RECYCLE_BIN_KEY = "novelsmith-recycle-bin";
 export const STORAGE_ERROR_EVENT = "novelsmith-storage-error";
 
 export const categoryIconMap: Record<string, string> = {
-  个人OS: "🧠",
+  织梦工作台: "🧠",
   主要内容: "📄",
   设定: "📁",
   角色: "👤",

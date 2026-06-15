@@ -33,7 +33,8 @@ export interface AgentIntentPlan {
   contextMode: "lean" | "balanced" | "deep";
 }
 
-const MEMORY_CATEGORIES = new Set(["个人OS", "项目底本", "剧情大纲", "反崩盘", "设定", "角色", "组织势力", "知识库", "主要内容"]);
+const WORKBENCH_CATEGORIES = new Set(["织梦工作台", "个人OS"]);
+const MEMORY_CATEGORIES = new Set(["织梦工作台", "个人OS", "项目底本", "剧情大纲", "反崩盘", "设定", "角色", "组织势力", "知识库", "主要内容"]);
 const IMPORTANT_TITLE_TERMS = ["SOUL.md", "COORDINATOR.md", "MEMORY.md", "KAIROS.md", "BRIDGE.md", "Coordinator", "Goal Mode", "MCP", "Gateway", "bridge-request", "执行桥", "工具观察", "项目任务", "长期目标", "开书控制卡", "故事底本", "续写卡", "伏笔账本", "章纲", "节拍", "文风", "世界观", "主角", "角色", "反派", "控制卡"];
 const STOP_TERMS = new Set(["请", "帮我", "一下", "这个", "那个", "现在", "需要", "内容", "小说", "章节", "正文", "输出", "不要"]);
 
@@ -43,8 +44,8 @@ function unique<T>(items: T[]) {
 
 function classifyMemory(file: WorkspaceFile): AgentMemoryShard["kind"] {
   const text = `${file.category} ${file.title}`;
-  if (file.category === "个人OS" && /SOUL|身份|偏好|边界/.test(text)) return "canon";
-  if (file.category === "个人OS" && /COORDINATOR|Coordinator|Goal Mode|MEMORY|KAIROS|BRIDGE|MCP|Gateway|bridge-request|记忆|工具观察|任务|长期目标|执行器|执行桥|编排器|闸门/.test(text)) return "state";
+  if (WORKBENCH_CATEGORIES.has(file.category) && /SOUL|身份|偏好|边界/.test(text)) return "canon";
+  if (WORKBENCH_CATEGORIES.has(file.category) && /COORDINATOR|Coordinator|Goal Mode|MEMORY|KAIROS|BRIDGE|MCP|Gateway|bridge-request|记忆|工具观察|任务|长期目标|执行器|执行桥|编排器|闸门/.test(text)) return "state";
   if (file.category === "项目底本" || /底本|控制卡|开书/.test(text)) return "canon";
   if (file.category === "反崩盘" || /续写卡|状态|伏笔账本|约束|边界/.test(text)) return "state";
   if (file.category === "剧情大纲" || /大纲|章纲|节拍|主线|分卷/.test(text)) return "outline";

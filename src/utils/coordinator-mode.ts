@@ -42,12 +42,12 @@ export function buildCoordinatorModePlan(params: {
 }): CoordinatorModePlan {
   const runMode: CoordinatorRunMode = params.plan.goalMode ? "goal-mode" : "task-mode";
   const activeAgents = params.swarm.agents.map((agent) => agent.key).join(",") || "coordinator";
-  const activeSkills = params.skills.activeCoreSkills.map((skill) => skill.key).join(",") || "personal-os-coordinator";
+  const activeSkills = params.skills.activeCoreSkills.map((skill) => skill.key).join(",") || "zhimeng-workbench-coordinator";
   const bridgeMode = params.executorBridge.mode;
 
   return {
     mode: runMode,
-    role: "Personal OS chief coordinator for Zhimeng: plan, retrieve, delegate, verify, write back, and keep the user-facing answer clear.",
+    role: "Zhimeng Agent Workbench chief coordinator: plan, retrieve, delegate, verify, write back, and keep the user-facing answer clear.",
     statusLine: `${runMode}｜domain=${params.plan.domain}｜phase=${params.plan.phase}｜dag=${params.workflow.currentNodeId}｜agents=${activeAgents}｜skills=${activeSkills}｜bridge=${bridgeMode}`,
     maxims: [
       "先理解目标，再决定是否需要工具、记忆、Skills 或子代理。",

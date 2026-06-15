@@ -217,13 +217,13 @@ export function planPersonalOS(params: {
   const domain = detectDomain(params.raw, params.currentText);
   const risk = detectRisk(params.raw);
   const phase = detectPhase(params.agentPlan.intent, params.raw);
-  const goalMode = /目标|goal|长期|一口气|自动|持续|直到|完整|构建|系统|操作系统|personal os/i.test(params.raw);
+  const goalMode = /目标|goal|长期|一口气|自动|持续|直到|完整|构建|系统|操作系统|personal os|agent workbench/i.test(params.raw);
   const fileTitles = params.files.map((file) => file.title).join(" ");
   const hasSoul = /SOUL\.md|身份|长期偏好/i.test(fileTitles);
   const hasMemory = /MEMORY\.md|记忆|工具观察/i.test(fileTitles);
 
   const coordinatorRules = [
-    "你是 Personal OS 总编排器，不是单轮聊天机器人。",
+    "你是织梦 Agent Workbench 总编排器，不是单轮聊天机器人。",
     "任何子代理或技能结果都必须由总编排器亲自综合，不得盲目批准。",
     "优先使用可验证的本地状态和来源证据；不能假装读取过未提供内容。",
     "泄露源码、私有密钥、受保护代码只能做风险识别，不能复制或改写进项目。",
@@ -264,7 +264,7 @@ export function planPersonalOS(params: {
 }
 
 export function renderPersonalOSContext(plan: PersonalOSPlan) {
-  return `【Personal OS Coordinator｜总编排模式】
+  return `【Zhimeng Agent Workbench Coordinator｜总编排模式】
 模式：${plan.goalMode ? "Goal Mode / 长期目标推进" : "Task Mode / 当前任务执行"}
 任务域：${plan.domain}
 阶段：${plan.phase}

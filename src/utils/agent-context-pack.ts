@@ -122,7 +122,7 @@ export function buildAgentContextPack(params: {
   const bridgeQueue: AgentContextBridgeCall[] = [
     {
       action: "skill_route",
-      purpose: "按当前任务路由 Personal OS / Skills",
+      purpose: "按当前任务路由织梦 Agent Workbench / Skills",
       payload: {
         task: compact(params.raw, 420),
         domain: params.plan.domain,

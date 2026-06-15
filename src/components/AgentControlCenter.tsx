@@ -916,20 +916,36 @@ interface RuntimeWatchSnapshot {
 
 const GATEWAY_ORIGIN = "http://127.0.0.1:8765";
 const SOURCE_BRANCH_URL = "https://github.com/le5444/le5444.github.io/tree/source";
-const AGENT_THREADS_KEY = "lumenos-agent-threads";
-const AGENT_THREAD_SPACES_KEY = "lumenos-agent-thread-spaces";
-const AGENT_RUN_REPORTS_KEY = "lumenos-agent-run-reports";
-const RUNTIME_LOGS_KEY = "lumenos-runtime-logs";
-const TERMINAL_COMMAND_HISTORY_KEY = "lumenos-terminal-command-history";
+const LEGACY_AGENT_THREADS_KEY = "lumenos-agent-threads";
+const LEGACY_AGENT_THREAD_SPACES_KEY = "lumenos-agent-thread-spaces";
+const AGENT_THREADS_KEY = "zhimeng-agent-threads";
+const AGENT_THREAD_SPACES_KEY = "zhimeng-agent-thread-spaces";
+const AGENT_RUN_REPORTS_KEY = "zhimeng-agent-run-reports";
+const RUNTIME_LOGS_KEY = "zhimeng-runtime-logs";
+const TERMINAL_COMMAND_HISTORY_KEY = "zhimeng-terminal-command-history";
 const WORKBENCH_LAYOUT_KEY = "zhimeng-workbench-layout";
-const CROSS_WORKSPACE_RECENTS_KEY = "lumenos-cross-workspace-recents";
-const WORKSPACE_CONTEXT_PACK_HISTORY_KEY = "lumenos-workspace-context-pack-history";
-const THREAD_CONTEXT_HISTORY_KEY = "lumenos-thread-context-history";
-const THREAD_CONTEXT_BASELINES_KEY = "lumenos-thread-context-baselines";
-const WORKSPACE_PERMISSION_PROFILES_KEY = "lumenos-workspace-permission-profiles";
-const WORKSPACE_ROOT_PROFILES_KEY = "lumenos-workspace-root-profiles";
-const WORKSPACE_SCAN_INDEXES_KEY = "lumenos-workspace-scan-indexes";
-const WORKSPACE_SKILL_SETS_KEY = "lumenos-workspace-skill-sets";
+const CROSS_WORKSPACE_RECENTS_KEY = "zhimeng-cross-workspace-recents";
+const WORKSPACE_CONTEXT_PACK_HISTORY_KEY = "zhimeng-workspace-context-pack-history";
+const THREAD_CONTEXT_HISTORY_KEY = "zhimeng-thread-context-history";
+const THREAD_CONTEXT_BASELINES_KEY = "zhimeng-thread-context-baselines";
+const WORKSPACE_PERMISSION_PROFILES_KEY = "zhimeng-workspace-permission-profiles";
+const WORKSPACE_ROOT_PROFILES_KEY = "zhimeng-workspace-root-profiles";
+const WORKSPACE_SCAN_INDEXES_KEY = "zhimeng-workspace-scan-indexes";
+const WORKSPACE_SKILL_SETS_KEY = "zhimeng-workspace-skill-sets";
+const LEGACY_STORAGE_KEYS: Partial<Record<string, string[]>> = {
+  [AGENT_THREAD_SPACES_KEY]: [LEGACY_AGENT_THREAD_SPACES_KEY],
+  [AGENT_RUN_REPORTS_KEY]: ["lumenos-agent-run-reports"],
+  [RUNTIME_LOGS_KEY]: ["lumenos-runtime-logs"],
+  [TERMINAL_COMMAND_HISTORY_KEY]: ["lumenos-terminal-command-history"],
+  [CROSS_WORKSPACE_RECENTS_KEY]: ["lumenos-cross-workspace-recents"],
+  [WORKSPACE_CONTEXT_PACK_HISTORY_KEY]: ["lumenos-workspace-context-pack-history"],
+  [THREAD_CONTEXT_HISTORY_KEY]: ["lumenos-thread-context-history"],
+  [THREAD_CONTEXT_BASELINES_KEY]: ["lumenos-thread-context-baselines"],
+  [WORKSPACE_PERMISSION_PROFILES_KEY]: ["lumenos-workspace-permission-profiles"],
+  [WORKSPACE_ROOT_PROFILES_KEY]: ["lumenos-workspace-root-profiles"],
+  [WORKSPACE_SCAN_INDEXES_KEY]: ["lumenos-workspace-scan-indexes"],
+  [WORKSPACE_SKILL_SETS_KEY]: ["lumenos-workspace-skill-sets"],
+};
 const RUNTIME_WATCH_INTERVALS = [5000, 15000, 30000];
 const INITIAL_STATE: ControlCenterState = {
   loading: false,
@@ -1171,6 +1187,19 @@ const DEFAULT_WORKBENCH_LAYOUT_STATE: WorkbenchLayoutState = {
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function loadJSONWithLegacyKeys<T>(key: string, fallback: T): T {
+  const current = loadJSON<T | null>(key, null);
+  if (current !== null) return current as T;
+  for (const legacyKey of LEGACY_STORAGE_KEYS[key] || []) {
+    const legacy = loadJSON<T | null>(legacyKey, null);
+    if (legacy !== null) {
+      saveJSON(key, legacy);
+      return legacy as T;
+    }
+  }
+  return fallback;
 }
 
 function asArray(value: unknown): unknown[] {
@@ -2697,17 +2726,23 @@ function flattenAgentThreadSpaces(index: AgentThreadSpacesIndex) {
 }
 
 function loadAgentThreads() {
-  const spacesIndex = normalizeAgentThreadSpacesIndex(loadJSON<unknown>(AGENT_THREAD_SPACES_KEY, null));
+  const spacesIndex = normalizeAgentThreadSpacesIndex(
+    loadJSONWithLegacyKeys<unknown>(AGENT_THREAD_SPACES_KEY, null),
+  );
   if (spacesIndex) {
     const threads = flattenAgentThreadSpaces(spacesIndex);
     if (threads.length) return threads;
   }
-  const legacyThreads = loadJSON<unknown[]>(AGENT_THREADS_KEY, [])
+  const legacyThreads = (
+    loadJSON<unknown[] | null>(AGENT_THREADS_KEY, null)
+    || loadJSON<unknown[] | null>(LEGACY_AGENT_THREADS_KEY, null)
+    || []
+  )
     .map(normalizeAgentThreadRecord)
     .filter((thread): thread is AgentThreadRecord => Boolean(thread))
     .sort((a, b) => b.updatedAt - a.updatedAt);
   if (legacyThreads.length) {
-    saveJSON(AGENT_THREAD_SPACES_KEY, buildAgentThreadSpacesIndex(legacyThreads, AGENT_THREADS_KEY));
+    saveJSON(AGENT_THREAD_SPACES_KEY, buildAgentThreadSpacesIndex(legacyThreads, LEGACY_AGENT_THREADS_KEY));
     return legacyThreads;
   }
   const threads = [createAgentThreadRecord()];
@@ -2849,7 +2884,7 @@ function dedupeWorkerTimeline(items: WorkerTimelineItem[]) {
 }
 
 function loadRuntimeLogs() {
-  return loadJSON<unknown[]>(RUNTIME_LOGS_KEY, [])
+  return loadJSONWithLegacyKeys<unknown[]>(RUNTIME_LOGS_KEY, [])
     .map(normalizeRuntimeLogEntry)
     .filter((entry): entry is RuntimeLogEntry => Boolean(entry))
     .sort((a, b) => b.at - a.at)
@@ -2879,7 +2914,7 @@ function normalizeAgentRunReportArtifact(value: unknown): AgentRunReportArtifact
 }
 
 function loadAgentRunReports() {
-  return loadJSON<unknown[]>(AGENT_RUN_REPORTS_KEY, [])
+  return loadJSONWithLegacyKeys<unknown[]>(AGENT_RUN_REPORTS_KEY, [])
     .map(normalizeAgentRunReportArtifact)
     .filter((item): item is AgentRunReportArtifact => Boolean(item))
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -2901,7 +2936,7 @@ function normalizeCrossWorkspaceRecentEntry(value: unknown): CrossWorkspaceRecen
 
 function loadCrossWorkspaceRecents() {
   const deduped = new Map<string, CrossWorkspaceRecentEntry>();
-  loadJSON<unknown[]>(CROSS_WORKSPACE_RECENTS_KEY, [])
+  loadJSONWithLegacyKeys<unknown[]>(CROSS_WORKSPACE_RECENTS_KEY, [])
     .map(normalizeCrossWorkspaceRecentEntry)
     .filter((entry): entry is CrossWorkspaceRecentEntry => Boolean(entry))
     .sort((a, b) => b.openedAt - a.openedAt)
@@ -2953,7 +2988,7 @@ function normalizeWorkspaceContextPackSnapshot(value: unknown): WorkspaceContext
 }
 
 function loadWorkspaceContextPackHistory() {
-  return loadJSON<unknown[]>(WORKSPACE_CONTEXT_PACK_HISTORY_KEY, [])
+  return loadJSONWithLegacyKeys<unknown[]>(WORKSPACE_CONTEXT_PACK_HISTORY_KEY, [])
     .map(normalizeWorkspaceContextPackSnapshot)
     .filter((item): item is WorkspaceContextPackSnapshot => Boolean(item))
     .sort((a, b) => b.at - a.at)
@@ -2986,7 +3021,7 @@ function normalizeThreadContextSnapshot(value: unknown): ThreadContextSnapshot |
 }
 
 function loadThreadContextHistory() {
-  return loadJSON<unknown[]>(THREAD_CONTEXT_HISTORY_KEY, [])
+  return loadJSONWithLegacyKeys<unknown[]>(THREAD_CONTEXT_HISTORY_KEY, [])
     .map(normalizeThreadContextSnapshot)
     .filter((item): item is ThreadContextSnapshot => Boolean(item))
     .sort((a, b) => b.at - a.at)
@@ -2994,7 +3029,7 @@ function loadThreadContextHistory() {
 }
 
 function loadThreadContextBaselines() {
-  const record = asRecord(loadJSON<unknown>(THREAD_CONTEXT_BASELINES_KEY, {}));
+  const record = asRecord(loadJSONWithLegacyKeys<unknown>(THREAD_CONTEXT_BASELINES_KEY, {}));
   return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, asString(value)]).filter(([, value]) => Boolean(value)));
 }
 
@@ -3111,7 +3146,7 @@ function normalizeWorkspacePermissionProfile(value: unknown): WorkspacePermissio
 
 function loadWorkspacePermissionProfiles() {
   const profiles: Record<string, WorkspacePermissionProfile> = {};
-  loadJSON<unknown[]>(WORKSPACE_PERMISSION_PROFILES_KEY, [])
+  loadJSONWithLegacyKeys<unknown[]>(WORKSPACE_PERMISSION_PROFILES_KEY, [])
     .map(normalizeWorkspacePermissionProfile)
     .filter((item): item is WorkspacePermissionProfile => Boolean(item))
     .forEach((profile) => {
@@ -3161,7 +3196,7 @@ function normalizeWorkspaceRootProfile(value: unknown): WorkspaceRootProfile | n
 
 function loadWorkspaceRootProfiles() {
   const profiles: Record<string, WorkspaceRootProfile> = {};
-  loadJSON<unknown[]>(WORKSPACE_ROOT_PROFILES_KEY, [])
+  loadJSONWithLegacyKeys<unknown[]>(WORKSPACE_ROOT_PROFILES_KEY, [])
     .map(normalizeWorkspaceRootProfile)
     .filter((item): item is WorkspaceRootProfile => Boolean(item))
     .forEach((profile) => {
@@ -3215,7 +3250,7 @@ function normalizeWorkspaceScanIndex(value: unknown): WorkspaceScanIndex | null 
 
 function loadWorkspaceScanIndexes() {
   const indexes: Record<string, WorkspaceScanIndex> = {};
-  loadJSON<unknown[]>(WORKSPACE_SCAN_INDEXES_KEY, [])
+  loadJSONWithLegacyKeys<unknown[]>(WORKSPACE_SCAN_INDEXES_KEY, [])
     .map(normalizeWorkspaceScanIndex)
     .filter((item): item is WorkspaceScanIndex => Boolean(item))
     .forEach((index) => {
@@ -3378,7 +3413,7 @@ function normalizeWorkbenchEditorTabs(value: unknown, fallbackActiveView: Workbe
 
 function loadWorkspaceSkillSets() {
   const sets: Record<string, WorkspaceSkillSet> = {};
-  loadJSON<unknown[]>(WORKSPACE_SKILL_SETS_KEY, [])
+  loadJSONWithLegacyKeys<unknown[]>(WORKSPACE_SKILL_SETS_KEY, [])
     .map(normalizeWorkspaceSkillSet)
     .filter((item): item is WorkspaceSkillSet => Boolean(item))
     .forEach((set) => {
@@ -4862,7 +4897,7 @@ function normalizeTerminalCommandHistoryEntry(value: unknown): TerminalCommandHi
 }
 
 function loadTerminalCommandHistory() {
-  return loadJSON<unknown[]>(TERMINAL_COMMAND_HISTORY_KEY, [])
+  return loadJSONWithLegacyKeys<unknown[]>(TERMINAL_COMMAND_HISTORY_KEY, [])
     .map(normalizeTerminalCommandHistoryEntry)
     .filter((entry): entry is TerminalCommandHistoryEntry => Boolean(entry))
     .slice(0, 80);
@@ -6263,7 +6298,7 @@ export function AgentControlCenter({
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const extension = format === "jsonl" ? "jsonl" : "md";
     const content = runtimeLogExportContent(entries, format);
-    downloadTextArtifact(`lumenos-runtime-logs-${timestamp}.${extension}`, content, format === "jsonl" ? "application/jsonl;charset=utf-8" : "text/markdown;charset=utf-8");
+    downloadTextArtifact(`zhimeng-runtime-logs-${timestamp}.${extension}`, content, format === "jsonl" ? "application/jsonl;charset=utf-8" : "text/markdown;charset=utf-8");
     appendRuntimeLog({
       channel: "output",
       title: "运行日志已导出",
@@ -6902,7 +6937,7 @@ export function AgentControlCenter({
     const thread = agentThreads.find((item) => item.id === threadId);
     if (!thread) return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `lumenos-agent-thread-${artifactSafeName(thread.title)}-${timestamp}.md`;
+    const filename = `zhimeng-agent-thread-${artifactSafeName(thread.title)}-${timestamp}.md`;
     downloadTextArtifact(filename, agentThreadExportMarkdown(thread), "text/markdown;charset=utf-8");
     appendRuntimeLog({
       channel: "output",
@@ -9158,7 +9193,7 @@ export function AgentControlCenter({
     }));
   const instructionStackBaseLayers: InstructionStackLayer[] = [
     {
-      id: "lumenos-goal",
+      id: "zhimeng-goal",
       kind: "lumen",
       label: "目标模式",
       title: "织梦写作台产品边界",
@@ -14444,7 +14479,7 @@ export function AgentControlCenter({
   const exportAgentThreadRunReport = (thread = activeThread) => {
     if (!thread) return;
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `lumenos-run-report-${artifactSafeName(thread.title || thread.task, "thread")}-${timestamp}.md`;
+    const filename = `zhimeng-run-report-${artifactSafeName(thread.title || thread.task, "thread")}-${timestamp}.md`;
     const content = agentThreadRunReportMarkdown({
       thread,
       runbook: agentThreadRunbook,
@@ -21465,7 +21500,7 @@ export function AgentControlCenter({
                   label="下载 Markdown"
                   icon={<Download className="h-3.5 w-3.5" />}
                   onClick={() => downloadTextArtifact(
-                    `lumenos-run-report-${artifactSafeName(activeEditorRunReport.threadTitle, "thread")}-${new Date(activeEditorRunReport.createdAt).toISOString().replace(/[:.]/g, "-")}.md`,
+                    `zhimeng-run-report-${artifactSafeName(activeEditorRunReport.threadTitle, "thread")}-${new Date(activeEditorRunReport.createdAt).toISOString().replace(/[:.]/g, "-")}.md`,
                     activeEditorRunReport.content,
                     "text/markdown;charset=utf-8",
                   )}

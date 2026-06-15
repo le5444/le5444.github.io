@@ -43,7 +43,7 @@ export const AGENT_ARCHITECTURE_SOURCES: AgentArchitectureSource[] = [
     label: "Claude Code",
     sourceKind: "official",
     borrowedPattern: "CLAUDE.md 记忆、权限/工具闸门、Subagents 隔离上下文、Hooks、MCP 与可复用 Skills。",
-    projectMapping: "映射为 Personal OS 记忆路由、Subagent Swarm、7 层安全防线和写入审批草案。",
+    projectMapping: "映射为织梦 Agent Workbench 记忆路由、Subagent Swarm、7 层安全防线和写入审批草案。",
   },
   {
     key: "work_buddy",

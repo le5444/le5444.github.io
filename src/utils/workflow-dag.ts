@@ -183,7 +183,7 @@ export function buildWorkflowDag(params: {
   const current = nodes.find((item) => item.status === "ready") || nodes[0];
   return {
     id: `dag-${params.plan.domain}-${params.plan.phase}`,
-    name: params.plan.domain === "writing" ? "Hermes 写作生产线 DAG" : "Personal OS 通用执行 DAG",
+    name: params.plan.domain === "writing" ? "织梦写作生产线 DAG" : "织梦通用执行 DAG",
     domain: params.plan.domain,
     currentNodeId: current.id,
     nodes,
