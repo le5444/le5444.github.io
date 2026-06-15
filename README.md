@@ -4,7 +4,7 @@
 
 [在线体验](https://le5444.github.io/) · [源码分支](https://github.com/le5444/le5444.github.io/tree/source) · [路线图](docs/项目路线图.md)
 
-![织梦写作台界面](docs/zhimeng-workbench-20260606.png)
+![织梦写作台界面](docs/zhimeng-workbench-20260615.png)
 
 ## 一句话
 
