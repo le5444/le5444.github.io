@@ -250,7 +250,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         assert_true("web_fetch" in tool_names, "MCP facade should expose bounded web_fetch tool")
         assert_true("mcp_call" in tool_names, "MCP facade should expose bounded mcp_call tool")
         assert_true("mcp_stdio_catalog" in tool_names, "MCP facade should expose stdio MCP catalog tool")
-        assert_true({"provider_catalog", "provider_status", "provider_probe"}.issubset(tool_names), "MCP facade should expose provider registry tools")
+        assert_true({"provider_catalog", "provider_config_status", "provider_status", "provider_probe"}.issubset(tool_names), "MCP facade should expose provider registry tools")
         resources = bridge.handle_mcp_rpc({"jsonrpc": "2.0", "id": "resources", "method": "resources/list", "params": {}}, execute=False)
         resource_list = resources.get("result", {}).get("resources", [])
         assert_true(len(resource_list) >= 5, "MCP facade should expose resources/list")
@@ -410,7 +410,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         )
         matrix = runtime.get("tool_matrix", [])
         matrix_actions = {item.get("action") for item in matrix if isinstance(item, dict)}
-        assert_true({"read_file", "workspace_scan", "write_file", "run_command", "skill_route", "skill_invoke", "skill_run", "scheduler_install", "web_fetch", "mcp_call", "mcp_stdio_catalog", "provider_catalog"}.issubset(matrix_actions), "runtime capabilities should expose the agent tool matrix")
+        assert_true({"read_file", "workspace_scan", "write_file", "run_command", "skill_route", "skill_invoke", "skill_run", "scheduler_install", "web_fetch", "mcp_call", "mcp_stdio_catalog", "provider_catalog", "provider_config_status"}.issubset(matrix_actions), "runtime capabilities should expose the agent tool matrix")
         assert_true("execute-skill" in str(runtime.get("capability_summary", {}).get("skills", "")), "runtime summary should expose gated activated skill runtime")
         assert_true("presets" in str(runtime.get("capability_summary", {}).get("provider_hub", "")), "runtime summary should expose Provider Hub")
         assert_true("registered" in str(runtime.get("capability_summary", {}).get("mcp_stdio", "")), "runtime summary should expose registered stdio MCP connectors")
@@ -678,6 +678,13 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         preset_ids = {item.get("id") for item in catalog.get("presets", []) if isinstance(item, dict)}
         assert_true("ollama-qwen" in preset_ids, "provider_catalog should include local Ollama preset")
 
+        config_result = direct_bridge_request("provider_config_status", {})
+        config_status = config_result.get("provider_config_status", {})
+        config_policy = config_status.get("policy", {})
+        assert_true(config_result.get("status") == "ok", "provider_config_status should succeed")
+        assert_true(config_policy.get("schema") == "zhimeng.provider-settings.v1", "provider_config_status should expose desktop config schema")
+        assert_true("provider-settings.json" in str(config_policy.get("default_path") or ""), "provider_config_status should expose the local config path")
+
         local_status_result = direct_bridge_request("provider_status", {"preset_id": "ollama-qwen"})
         local_status = local_status_result.get("provider_status", {})
         local_readiness = local_status.get("readiness", {})
@@ -742,6 +749,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
 
         return {
             "preset_count": catalog.get("preset_count"),
+            "config_schema": config_policy.get("schema"),
             "providers": sorted(provider_ids),
             "local_key_required": local_readiness.get("key_required"),
             "remote_requires_allow": remote_readiness.get("remote_requires_allow_remote_model"),

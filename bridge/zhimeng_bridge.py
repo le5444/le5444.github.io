@@ -77,6 +77,7 @@ SAFE_WORKER_BRIDGE_ACTIONS = {
     "source_audit",
     "source_digest",
     "provider_catalog",
+    "provider_config_status",
     "provider_status",
     "mcp_stdio_catalog",
     "goal_bootstrap",
@@ -671,6 +672,16 @@ def runtime_capabilities(
             "default": "read_only",
         },
         {
+            "action": "provider_config_status",
+            "label": "Desktop Provider Config",
+            "enabled": True,
+            "mode": "read-only-local-config",
+            "gateway_flag": "always-on",
+            "request_gate": "none; include_secret=true additionally requires import_to_frontend=true",
+            "scope": "local desktop provider-settings.json",
+            "default": "read_only",
+        },
+        {
             "action": "provider_status",
             "label": "Provider Status",
             "enabled": True,
@@ -818,7 +829,7 @@ def provider_registry_policy() -> Dict[str, Any]:
         "providers": sorted(PROVIDER_LABELS),
         "preset_count": len(PROVIDER_PRESETS),
         "secret_storage": "Gateway never persists API keys; use env vars or one-shot payload keys redacted from state",
-        "actions": ["provider_catalog", "provider_status", "provider_probe"],
+        "actions": ["provider_catalog", "provider_config_status", "provider_status", "provider_probe"],
         "probe_requires": ["payload.execute=true", "local endpoints allowed by default", "remote endpoints require payload.allow_remote_model=true"],
         "timeout_seconds_max": 20,
     }
@@ -1382,7 +1393,10 @@ def run_verification_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "blocked", "argv": argv, "allowlist": allow, "policy": command_execution_policy()}
     timeout_seconds = min(int(payload.get("timeout_seconds") or 20), command_execution_policy()["timeout_seconds_max"])
     cwd = safe_path(str(payload.get("cwd") or "."))
-    resolved_argv = [resolve_executable(argv[0]), *argv[1:]]
+    resolved_executable = resolve_executable(argv[0])
+    resolved_argv = [resolved_executable, *argv[1:]]
+    if os.name == "nt" and Path(resolved_executable).suffix.lower() in {".cmd", ".bat"}:
+        resolved_argv = [os.environ.get("COMSPEC") or "cmd.exe", "/d", "/c", resolved_executable, *argv[1:]]
     completed = subprocess.run(
         resolved_argv,
         cwd=cwd,
@@ -1513,7 +1527,7 @@ def safety_review(action: str, purpose: str, payload: Dict[str, Any]) -> List[Di
         "Command validators blocked this request." if command_blocked else "Action requires approval or explicit execution flags." if action in approval_actions else "Action is read/stateful within Gateway policy.",
     ))
 
-    empty_payload_allowed = {"status", "approval_status", "runtime_events", "memory_status", "memory_backup_status", "memory_retrieve", "memory_bootstrap", "memory_consolidate", "context_pack", "source_audit", "source_digest", "provider_catalog", "provider_status", "provider_probe", "mcp_stdio_catalog", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_status", "skill_crystallize", "skill_review", "skill_activate", "kairos_tick", "scheduler_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "worker_status", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "user_model_status", "user_model_reflect", "swarm_bootstrap", "evolution_bootstrap"}
+    empty_payload_allowed = {"status", "approval_status", "runtime_events", "memory_status", "memory_backup_status", "memory_retrieve", "memory_bootstrap", "memory_consolidate", "context_pack", "source_audit", "source_digest", "provider_catalog", "provider_config_status", "provider_status", "provider_probe", "mcp_stdio_catalog", "goal_bootstrap", "skill_bootstrap", "skill_route", "skill_invoke", "skill_status", "skill_crystallize", "skill_review", "skill_activate", "kairos_tick", "scheduler_status", "scheduler_plan", "scheduler_install", "scheduler_uninstall", "worker_status", "sandbox_probe", "sandbox_status", "phase_audit", "completion_audit", "user_model_status", "user_model_reflect", "swarm_bootstrap", "evolution_bootstrap"}
     review.append(safety_item(
         "input",
         "pass" if payload or action in empty_payload_allowed else "warn",
@@ -1565,6 +1579,7 @@ def bridge_manifest(host: str = "127.0.0.1", port: int = 8765) -> Dict[str, Any]
             {"action": "source_audit", "mode": "read", "description": "Classify research sources and return allowed reuse boundaries before learning from them."},
             {"action": "source_digest", "mode": "stateful", "description": "Turn audited safe sources into Personal OS architecture adoption notes."},
             {"action": "provider_catalog", "mode": "read", "description": "List model provider presets, wire formats, groups, and key requirements."},
+            {"action": "provider_config_status", "mode": "read", "description": "Read the local desktop Provider switch config and return a frontend-ready settings snapshot without network calls."},
             {"action": "provider_status", "mode": "read", "description": "Inspect one provider/model configuration and model-worker readiness without network calls."},
             {"action": "provider_probe", "mode": "approval-or-execute-provider", "description": "Queue a provider model-list probe by default; live probes require Gateway execute-provider, payload execute=true, and remote probes require allow_remote_model=true."},
             {"action": "goal_bootstrap", "mode": "stateful", "description": "Create a Goal Mode planner tree and optionally register workflow/subagents/KAIROS records."},
@@ -1917,6 +1932,17 @@ def mcp_tool_specs() -> List[Dict[str, Any]]:
                     "provider": {"type": "string", "enum": sorted(PROVIDER_LABELS)},
                     "local_only": {"type": "boolean"},
                     "limit": {"type": "number"},
+                },
+            },
+        },
+        {
+            "name": "provider_config_status",
+            "description": "Read the local desktop Provider switch config and return a frontend-ready settings snapshot without network calls.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "include_secret": {"type": "boolean"},
+                    "import_to_frontend": {"type": "boolean"},
                 },
             },
         },
@@ -2808,6 +2834,7 @@ def runtime_events(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def approval_decide(
     payload: Dict[str, Any],
+    execute_command: bool = False,
     execute_write: bool = False,
     execute_memory: bool = False,
     execute_provider: bool = False,
@@ -2846,14 +2873,14 @@ def approval_decide(
             "decision": decision_record,
             "message": "Approval rejected; no action executed.",
         }
-    if action != "write_file" and action not in MEMORY_MANAGEMENT_ACTIONS and action != "provider_probe":
+    if action != "write_file" and action != "run_command" and action not in MEMORY_MANAGEMENT_ACTIONS and action != "provider_probe":
         decision_record = {
             "status": "blocked",
             "decision": "execute",
             "reason": reason,
             "decided_at": now_iso(),
             "action": action,
-            "message": "approval_decide currently only executes queued write_file, memory management, and provider_probe approvals.",
+            "message": "approval_decide currently only executes queued write_file, run_command, memory management, and provider_probe approvals.",
         }
         record["decision"] = decision_record
         save_approval_record(approval_id, record)
@@ -2862,7 +2889,51 @@ def approval_decide(
             "approval_required": True,
             "approval_id": approval_id,
             "decision": decision_record,
-            "message": "Only write_file, memory management, and provider_probe approvals can be executed by approval_decide.",
+            "message": "Only write_file, run_command, memory management, and provider_probe approvals can be executed by approval_decide.",
+        }
+    if action == "run_command":
+        if not execute_command:
+            return {
+                "status": "approval_required",
+                "approval_required": True,
+                "approval_id": approval_id,
+                "message": "Executing a run_command approval requires Gateway --execute-command.",
+            }
+        queued_payload = as_record(request.get("payload")).copy()
+        queued_payload["execute"] = True
+        command = str(queued_payload.get("command") or "")
+        cwd = str(queued_payload.get("cwd") or "")
+        validation = validate_command(command, cwd, str(request.get("purpose") or reason or "approved run_command"))
+        if any(item["severity"] == "block" for item in validation):
+            command_result = {
+                "status": "blocked",
+                "validation": validation,
+                "command_policy": command_execution_policy(),
+                "message": "Command validators blocked this queued approval.",
+            }
+        else:
+            command_result = run_verification_command(queued_payload)
+            command_result["validation"] = validation
+        command_status_value = str(command_result.get("status") or "blocked")
+        decision_record = {
+            "status": "executed" if command_status_value in {"ok", "failed"} else command_status_value,
+            "decision": "execute",
+            "reason": reason,
+            "decided_at": now_iso(),
+            "action": action,
+            "target": command,
+            "run_command": command_result,
+        }
+        record["decision"] = decision_record
+        record["execution_result"] = command_result
+        save_approval_record(approval_id, record)
+        return {
+            "status": "ok" if command_status_value == "ok" else command_status_value,
+            "approval_required": command_status_value not in {"ok", "failed"},
+            "approval_id": approval_id,
+            "decision": decision_record,
+            "run_command": command_result,
+            "message": "run_command approval executed through verification allowlist." if command_status_value in {"ok", "failed"} else str(command_result.get("message") or command_result.get("allowlist", {}).get("reason") or "run_command approval did not execute."),
         }
     if action == "provider_probe":
         if not execute_provider:
@@ -6378,7 +6449,7 @@ def phase_audit() -> Dict[str, Any]:
                 {"ok": file_contains("bridge/zhimeng_bridge.py", ["execute_web_fetch", "web_fetch_policy", "execute_web"]) and "web_fetch" in {item.get("name") for item in mcp_tool_specs()}, "item": "Gateway exposes bounded API fetch behind execute-web gate", "source": "bridge/zhimeng_bridge.py + mcp_tool_specs"},
                 {"ok": file_contains("bridge/zhimeng_bridge.py", ["execute_mcp_call", "mcp_call_policy", "execute_mcp"]) and "mcp_call" in {item.get("name") for item in mcp_tool_specs()}, "item": "Gateway exposes bounded HTTP/registered-stdio JSON-RPC MCP calls behind execute-mcp gate", "source": "bridge/zhimeng_bridge.py + mcp_tool_specs"},
                 {"ok": file_contains("bridge/zhimeng_bridge.py", ["mcp_stdio_registry", "execute_mcp_stdio_call", "mcp_stdio_catalog"]) and "mcp_stdio_catalog" in {item.get("name") for item in mcp_tool_specs()}, "item": "Gateway exposes a registered-only stdio MCP process connector and catalog", "source": "bridge/zhimeng_bridge.py + mcp_tool_specs"},
-                {"ok": file_contains("bridge/zhimeng_bridge.py", ["provider_catalog", "provider_status", "provider_probe", "provider_registry_policy"]) and {"provider_catalog", "provider_status", "provider_probe"}.issubset({item.get("name") for item in mcp_tool_specs()}), "item": "Gateway exposes Provider Hub catalog/status/probe tools with explicit remote gates", "source": "bridge/zhimeng_bridge.py + mcp_tool_specs"},
+                {"ok": file_contains("bridge/zhimeng_bridge.py", ["provider_catalog", "provider_config_status", "provider_status", "provider_probe", "provider_registry_policy"]) and {"provider_catalog", "provider_config_status", "provider_status", "provider_probe"}.issubset({item.get("name") for item in mcp_tool_specs()}), "item": "Gateway exposes Provider Hub catalog/config/status/probe tools with explicit remote gates", "source": "bridge/zhimeng_bridge.py + mcp_tool_specs"},
                 {"ok": file_contains("src/utils/executor-bridge.ts", ["skill_crystallize", "user_model_status", "sandbox_probe"]), "item": "Frontend bridge accepts advanced Gateway actions", "source": "src/utils/executor-bridge.ts"},
             ],
             "gaps": ["HTTP/stdio JSON-RPC facades expose tools/resources/prompts but are still not a full production MCP transport with subscriptions or streaming."],
@@ -6556,7 +6627,7 @@ def completion_audit() -> Dict[str, Any]:
                 {"ok": "web_fetch" in actions and "web_fetch" in tool_names and file_contains("bridge/zhimeng_bridge.py", ["execute_web_fetch", "web_fetch_policy", "execute_web"]), "item": "Bounded web/API fetch connector exists behind execute-web gate.", "source": "bridge_manifest + mcp_tool_specs + bridge/zhimeng_bridge.py"},
                 {"ok": "mcp_call" in actions and "mcp_call" in tool_names and file_contains("bridge/zhimeng_bridge.py", ["execute_mcp_call", "mcp_call_policy", "execute_mcp"]), "item": "Bounded HTTP JSON-RPC MCP connector exists behind execute-mcp gate.", "source": "bridge_manifest + mcp_tool_specs + bridge/zhimeng_bridge.py"},
                 {"ok": "mcp_stdio_catalog" in actions and "mcp_stdio_catalog" in tool_names and file_contains("bridge/zhimeng_bridge.py", ["mcp_stdio_registry", "execute_mcp_stdio_call", "registered-only"]), "item": "Registered stdio MCP process connector exists behind execute-mcp gate; arbitrary command strings are not accepted.", "source": "bridge_manifest + mcp_tool_specs + bridge/zhimeng_bridge.py"},
-                {"ok": {"provider_catalog", "provider_status", "provider_probe"}.issubset(actions) and {"provider_catalog", "provider_status", "provider_probe"}.issubset(tool_names), "item": "Provider Hub catalog/status/probe tools are exposed through Gateway and MCP.", "source": "bridge_manifest + mcp_tool_specs"},
+                {"ok": {"provider_catalog", "provider_config_status", "provider_status", "provider_probe"}.issubset(actions) and {"provider_catalog", "provider_config_status", "provider_status", "provider_probe"}.issubset(tool_names), "item": "Provider Hub catalog/config/status/probe tools are exposed through Gateway and MCP.", "source": "bridge_manifest + mcp_tool_specs"},
                 {"ok": file_contains("src/components/AIChatPanel.tsx", ["Provider库", "API状态", "API探测", "Provider Hub"]), "item": "Frontend exposes Provider Hub buttons and snapshots.", "source": "src/components/AIChatPanel.tsx"},
             ],
             ["production_mcp_transport: current MCP layer is a useful JSON-RPC facade plus bounded HTTP/registered-stdio JSON-RPC client, not a full production transport with streaming/subscriptions."],
@@ -6569,7 +6640,7 @@ def completion_audit() -> Dict[str, Any]:
                 {"ok": len(PROVIDER_PRESETS) >= 30, "item": f"Gateway mirrors {len(PROVIDER_PRESETS)} provider presets.", "source": "PROVIDER_PRESETS"},
                 {"ok": set(model_worker_policy().get("providers", [])) == {"openai-compatible", "anthropic", "gemini", "ollama"}, "item": "Model worker supports OpenAI-compatible, Anthropic, Gemini, and Ollama providers.", "source": "model_worker_policy"},
                 {"ok": file_contains("bridge/zhimeng_bridge.py", ["provider_allows_empty_key", "remote provider probes require allow_remote_model=true", "GEMINI_API_KEY"]), "item": "Provider status/probe preserves key and remote-call gates.", "source": "bridge/zhimeng_bridge.py"},
-                {"ok": file_contains("src/utils/executor-bridge.ts", ["provider_catalog", "provider_status", "provider_probe"]), "item": "Frontend bridge protocol accepts Provider Hub actions.", "source": "src/utils/executor-bridge.ts"},
+                {"ok": file_contains("src/utils/executor-bridge.ts", ["provider_catalog", "provider_config_status", "provider_status", "provider_probe"]), "item": "Frontend bridge protocol accepts Provider Hub actions.", "source": "src/utils/executor-bridge.ts"},
             ],
             ["live_provider_probe_requires_config: local probes are healthchecked; real remote provider probes require user API key and allow_remote_model=true."],
         ),
@@ -7336,6 +7407,126 @@ def provider_key_env(provider: str) -> str:
         "ollama": "",
         "openai-compatible": model_worker_policy()["default_api_key_env"],
     }.get(provider, model_worker_policy()["default_api_key_env"])
+
+
+PROVIDER_SWITCH_SCHEMA = "zhimeng.provider-settings.v1"
+
+
+def provider_switch_config_path() -> Path:
+    override = os.environ.get("ZHIMENG_PROVIDER_CONFIG", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        return Path(appdata).expanduser().resolve() / "ZhimengWritingAgent" / "provider-settings.json"
+    return Path.home() / ".zhimeng-writing-agent" / "provider-settings.json"
+
+
+def provider_switch_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def sanitize_provider_switch_profile(profile: Dict[str, Any], include_secret: bool = False) -> Dict[str, Any]:
+    api_url = str(profile.get("apiUrl") or profile.get("api_url") or "").strip()
+    provider = str(profile.get("provider") or infer_model_provider(api_url)).strip()
+    api_key = str(profile.get("apiKey") or profile.get("api_key") or "").strip()
+    profile_id = str(profile.get("id") or profile.get("profileId") or profile.get("presetId") or f"api-profile-{uuid.uuid4()}").strip()
+    normalized = {
+        "id": profile_id,
+        "name": str(profile.get("name") or profile.get("label") or profile.get("modelName") or profile.get("model_name") or profile_id).strip(),
+        "apiUrl": api_url,
+        "apiKey": api_key if include_secret else ("[present:redacted]" if api_key else ""),
+        "apiKeyEnv": str(profile.get("apiKeyEnv") or profile.get("api_key_env") or provider_key_env(provider)).strip(),
+        "modelId": str(profile.get("modelId") or profile.get("model_id") or profile.get("model") or "").strip(),
+        "modelName": str(profile.get("modelName") or profile.get("model_name") or profile.get("name") or "").strip(),
+        "provider": provider,
+        "temperature": profile.get("temperature"),
+        "maxTokens": profile.get("maxTokens") if profile.get("maxTokens") is not None else profile.get("max_tokens"),
+        "source": str(profile.get("source") or "desktop-provider-switch"),
+        "updatedAt": profile.get("updatedAt") or profile.get("updated_at") or provider_switch_now(),
+    }
+    if normalized["temperature"] in ("", None):
+        normalized["temperature"] = None
+    if normalized["maxTokens"] in ("", None):
+        normalized["maxTokens"] = None
+    return normalized
+
+
+def load_provider_switch_config(include_secret: bool = False) -> Dict[str, Any]:
+    path = provider_switch_config_path()
+    if not path.exists():
+        return {
+            "schema": PROVIDER_SWITCH_SCHEMA,
+            "exists": False,
+            "path": str(path),
+            "activeProfileId": "",
+            "profiles": [],
+            "updatedAt": None,
+        }
+    data = json.loads(path.read_text(encoding="utf-8"))
+    profiles = data.get("profiles") if isinstance(data.get("profiles"), list) else []
+    safe_profiles = [sanitize_provider_switch_profile(as_record(profile), include_secret=include_secret) for profile in profiles]
+    active_id = str(data.get("activeProfileId") or data.get("active_profile_id") or "").strip()
+    if not active_id and safe_profiles:
+        active_id = str(safe_profiles[0].get("id") or "")
+    return {
+        "schema": str(data.get("schema") or PROVIDER_SWITCH_SCHEMA),
+        "exists": True,
+        "path": str(path),
+        "activeProfileId": active_id,
+        "profiles": safe_profiles,
+        "updatedAt": data.get("updatedAt") or data.get("updated_at"),
+    }
+
+
+def save_provider_switch_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    path = provider_switch_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    profiles = [sanitize_provider_switch_profile(as_record(profile), include_secret=True) for profile in config.get("profiles", []) if isinstance(profile, dict)]
+    active_id = str(config.get("activeProfileId") or config.get("active_profile_id") or "").strip()
+    if not active_id and profiles:
+        active_id = str(profiles[0].get("id") or "")
+    payload = {
+        "schema": PROVIDER_SWITCH_SCHEMA,
+        "updatedAt": config.get("updatedAt") or provider_switch_now(),
+        "activeProfileId": active_id,
+        "profiles": profiles,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return load_provider_switch_config(include_secret=False)
+
+
+def provider_config_status(payload: Dict[str, Any]) -> Dict[str, Any]:
+    include_secret = bool(payload.get("include_secret") and payload.get("import_to_frontend"))
+    config = load_provider_switch_config(include_secret=include_secret)
+    active = next((profile for profile in config.get("profiles", []) if profile.get("id") == config.get("activeProfileId")), None)
+    settings = None
+    if active:
+        settings = {
+            "apiUrl": active.get("apiUrl") or "",
+            "apiKey": active.get("apiKey") if include_secret else ("[present:redacted]" if active.get("apiKey") else ""),
+            "modelId": active.get("modelId") or "",
+            "modelName": active.get("modelName") or active.get("name") or "",
+            "provider": active.get("provider") or infer_model_provider(str(active.get("apiUrl") or "")),
+            "temperature": active.get("temperature"),
+            "maxTokens": active.get("maxTokens"),
+            "profiles": config.get("profiles", []),
+            "activeProfileId": config.get("activeProfileId") or "",
+            "desktopConfigImportedAt": config.get("updatedAt"),
+            "desktopConfigSource": "desktop-provider-switch",
+        }
+    return {
+        "status": "ok",
+        "policy": {
+            "schema": PROVIDER_SWITCH_SCHEMA,
+            "config_env": "ZHIMENG_PROVIDER_CONFIG",
+            "default_path": str(provider_switch_config_path()),
+            "secret_response": "only when include_secret=true and import_to_frontend=true; run records redact secrets",
+        },
+        "config": config,
+        "active_profile": active,
+        "settings": settings,
+    }
 
 
 def provider_wire_format(provider: str, api_url: str) -> Dict[str, Any]:
@@ -8684,6 +8875,7 @@ def handle_request(
             result["approval_required"] = True
             result["status"] = "approval_required"
             result["message"] = "Command execution requires --execute-command plus payload execute=true; otherwise this bridge validates and records command drafts only."
+            result["approval_id"] = save_record("approvals", req, result)
     elif action == "read_file":
         target = resolve_file_path(str(payload.get("path") or ""), access_profile, full_access_files=full_access_files)
         result["target"] = str(target)
@@ -8827,7 +9019,7 @@ def handle_request(
             "message": "Gateway runtime timeline merged from runs, approvals, and workers.",
         })
     elif action == "approval_decide":
-        decision_result = approval_decide(payload, execute_write=execute_write, execute_memory=execute_memory, execute_provider=execute_provider, full_access_files=full_access_files)
+        decision_result = approval_decide(payload, execute_command=execute_command, execute_write=execute_write, execute_memory=execute_memory, execute_provider=execute_provider, full_access_files=full_access_files)
         result.update({
             "approval_required": bool(decision_result.get("approval_required", False)),
             "status": str(decision_result.get("status") or "ok"),
@@ -8872,6 +9064,14 @@ def handle_request(
             "status": "ok",
             "provider_catalog": provider_catalog(payload),
             "message": "Provider catalog returned without network calls or key persistence.",
+        })
+    elif action == "provider_config_status":
+        config_status = provider_config_status(payload)
+        result.update({
+            "approval_required": False,
+            "status": "ok",
+            "provider_config_status": config_status,
+            "message": "Desktop Provider switch config returned without network calls.",
         })
     elif action == "provider_status":
         result.update({

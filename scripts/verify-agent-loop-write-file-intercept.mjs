@@ -1,0 +1,121 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import ts from "typescript";
+
+function compileTsModule(relativePath, name, replacements = []) {
+  const sourcePath = new URL(relativePath, import.meta.url);
+  let source = readFileSync(sourcePath, "utf8");
+  for (const [pattern, replacement] of replacements) {
+    source = source.replace(pattern, replacement);
+  }
+  const compiled = ts.transpileModule(source, {
+    fileName: sourcePath.pathname,
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2020,
+      verbatimModuleSyntax: false,
+    },
+  }).outputText;
+  const modulePath = join(tmpdir(), `zhimeng-verify-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}.mjs`);
+  writeFileSync(modulePath, compiled, "utf8");
+  return import(pathToFileURL(modulePath).href);
+}
+
+function assertEqual(actual, expected, label) {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assert(condition, label) {
+  if (!condition) throw new Error(label);
+}
+
+const stubPath = join(tmpdir(), `zhimeng-agent-loop-write-file-stubs-${Date.now()}-${Math.random().toString(16).slice(2)}.mjs`);
+writeFileSync(stubPath, [
+  "export function planPersonalOS(){ return { domain: 'coding', phase: 'act', risk: 'medium' }; }",
+  "export function renderPersonalOSContext(){ return 'personal-os'; }",
+  "export function planAgentIntent(){ return { contextMode: 'lean' }; }",
+  "export function selectAgentMemoryShards(){ return { memories: [] }; }",
+  "export function selectAgentSkills(){ return []; }",
+  "export function buildAgentContextPack(){ return {}; }",
+  "export function renderAgentContextPack(){ return 'context-pack'; }",
+  "export function buildToolRouteBundle(){ return { approvalRequired: true }; }",
+  "export function sendRawChat(){ return Promise.resolve('准备写入\\n<bridge-request>{\"id\":\"req-write-1\",\"action\":\"write_file\",\"purpose\":\"写入 Agent Loop 草案\",\"payload\":{\"path\":\"src/example.ts\",\"mode\":\"replace\",\"access_profile\":\"workspace\",\"content\":\"export const ok = true;\"}}</bridge-request>'); }",
+  "export function buildExecutorBridgeManifest(){ return {}; }",
+  "export function extractExecutorBridgeRequestsFromText(){ return [{ id: 'req-write-1', action: 'write_file', purpose: '写入 Agent Loop 草案', payload: { path: 'src/example.ts', mode: 'replace', access_profile: 'workspace', content: 'export const ok = true;' } }]; }",
+  "export function buildWriteFileDiffDraftFromPayload({ payload, requestId }){ return { status: 'draft', decision: '等待审查 Diff', detail: 'AI 请求 write_file：1 个文件、1 个待审 hunk；尚未写入。', planItems: [], request: payload, proposal: { request_id: requestId || 'req-write-1' }, targetPaths: [payload.path], hunks: [{ id: 'hunk-1', fileId: 'command-src/example.ts', targetPath: payload.path, mode: payload.mode, accessProfile: payload.access_profile, oldSha256: '', requestId: requestId || 'req-write-1', title: 'example.ts · replace', status: 'pending', writeContent: payload.content, content: '+export const ok = true;' }] }; }",
+  "export function assembleSkills(){ return []; }",
+  "export function buildWorkflowDag(){ return {}; }",
+  "export function htmlToPlainText(value){ return String(value || ''); }",
+  "export function buildOneShotToolFollowupPrompt(){ return ''; }",
+].join("\n"), "utf8");
+
+const stubUrl = pathToFileURL(stubPath).href;
+const replacements = [
+  [/import \{ planPersonalOS[\s\S]*?from "\.\.\/\.\.\/utils\/personal-os";/g, `import { planPersonalOS, renderPersonalOSContext } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ planAgentIntent[\s\S]*?from "\.\.\/\.\.\/utils\/agent-memory";/g, `import { planAgentIntent, selectAgentMemoryShards, selectAgentSkills } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ buildAgentContextPack[\s\S]*?from "\.\.\/\.\.\/utils\/agent-context-pack";/g, `import { buildAgentContextPack, renderAgentContextPack } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ buildToolRouteBundle \} from "\.\.\/\.\.\/utils\/tool-registry";/g, `import { buildToolRouteBundle } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ sendRawChat[\s\S]*?from "\.\.\/\.\.\/store\/settings";/g, `import { sendRawChat } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ buildExecutorBridgeManifest[\s\S]*?from "\.\.\/\.\.\/utils\/executor-bridge";/g, `import { buildExecutorBridgeManifest, extractExecutorBridgeRequestsFromText } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ buildWriteFileDiffDraftFromPayload \} from "\.\.\/\.\.\/utils\/write-file-diff-draft";/g, `import { buildWriteFileDiffDraftFromPayload } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ assembleSkills \} from "\.\.\/\.\.\/utils\/skill-registry";/g, `import { assembleSkills } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ buildWorkflowDag \} from "\.\.\/\.\.\/utils\/workflow-dag";/g, `import { buildWorkflowDag } from ${JSON.stringify(stubUrl)};`],
+  [/import \{ htmlToPlainText \} from "\.\.\/\.\.\/utils\/helpers";/g, `import { htmlToPlainText } from ${JSON.stringify(stubUrl)};`],
+  [/import type \{ PromptTemplate, WorkspaceFile \} from "\.\.\/\.\.\/store\/workspace";/g, ""],
+  [/import \{ buildOneShotToolFollowupPrompt \} from "\.\/agent-loop-bridge";/g, `import { buildOneShotToolFollowupPrompt } from ${JSON.stringify(stubUrl)};`],
+];
+
+const { runAgentLoop } = await compileTsModule("../src/os/kernel/agent-loop.ts", "agent-loop-write-file-intercept", replacements);
+
+const fetchCalls = [];
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (_url, init = {}) => {
+  const body = init.body ? JSON.parse(String(init.body)) : {};
+  fetchCalls.push({ action: body.action, body });
+  if (body.action !== "context_pack") {
+    throw new Error(`unexpected Gateway action: ${body.action}`);
+  }
+  return {
+    ok: true,
+    json: async () => ({
+      status: "ok",
+      context_pack: {
+        context_pack: [],
+        thread_context: [],
+        active_skill_keys: [],
+        tool_policy: {},
+      },
+    }),
+    text: async () => JSON.stringify({ status: "ok" }),
+  };
+};
+
+try {
+  const toolCalls = [];
+  const result = await runAgentLoop("请写入 src/example.ts", { provider: "openai", apiKey: "test", apiUrl: "http://example.test/v1", modelId: "test-model" }, {
+    maxIterations: 2,
+    agentContext: {
+      default_write_path: "bridge/agent-files/command-center-plan.md",
+      thread_id: "thread-1",
+    },
+    onToolCall: (tool) => toolCalls.push(tool),
+  });
+
+  assertEqual(result.stopReason, "approval_required", "write_file pauses for review");
+  assertEqual(result.pendingReviews.length, 1, "write_file creates one pending review");
+  assertEqual(result.pendingApprovals.length, 0, "write_file diff draft has no approval id yet");
+  assertEqual(result.toolCalls, 1, "one model tool request");
+  assert(result.summary.includes("等待 Diff 审查"), "summary mentions diff review");
+  assert(result.toolResults.some((tool) => tool.action === "write_file" && tool.status === "diff_draft"), "tool result is diff draft");
+  assert(toolCalls.some((tool) => tool.action === "write_file" && tool.diffDraft), "onToolCall receives diff draft");
+  assertEqual(fetchCalls.length, 1, "only context_pack hits Gateway");
+  assertEqual(fetchCalls[0].action, "context_pack", "Gateway call is context_pack only");
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+console.log("agent-loop-write-file-intercept ok");

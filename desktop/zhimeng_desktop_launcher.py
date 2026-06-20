@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Windows desktop launcher for LumenOS Personal Agent OS.
+Windows desktop launcher for 织梦写作台 / Zhimeng Writing Agent.
 
 The EXE built from this file starts the local Gateway, serves the built
-frontend from dist/, and opens the editor in the user's browser.
+frontend from dist/, and opens the editor in the user's browser. LumenOS is
+the internal Agent OS runtime layer behind the public Zhimeng desktop shell.
 """
 
 from __future__ import annotations
@@ -262,7 +263,7 @@ def run_doctor(root: Path, permission: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="LumenOS Personal Agent OS desktop launcher")
+    parser = argparse.ArgumentParser(description="Zhimeng Writing Agent desktop launcher")
     parser.add_argument("--profile", choices=sorted(PERMISSION_PROFILES), help="desktop permission profile")
     parser.add_argument("--list-profiles", action="store_true", help="print available permission profiles and exit")
     parser.add_argument("--doctor", action="store_true", help="verify packaged assets and Gateway import without starting services")
@@ -290,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         gateway = start_gateway(root, permission, int(args.gateway_port))
         frontend = start_frontend(root, int(args.ui_port))
         summary = {
-            "app": "LumenOS Personal Agent OS",
+            "app": "织梦写作台 / Zhimeng Writing Agent",
             "root": str(root),
             "permission_profile": permission,
             "gateway": gateway,
@@ -299,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         if not args.no_open:
             webbrowser.open(frontend["url"])
-        print("LumenOS Personal Agent OS is running. Close this window to stop the desktop launcher.")
+        print("织梦写作台 / Zhimeng Writing Agent is running. Close this window to stop the desktop launcher.")
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

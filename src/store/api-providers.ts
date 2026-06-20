@@ -417,6 +417,15 @@ export interface SendOptions {
   systemPrompt?: string;
 }
 
+export interface ProviderRequestPreview {
+  provider: ProviderId;
+  url: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+  fallbackUrl?: string;
+  streamMode: "sse" | "ndjson";
+}
+
 // 自动嗅探 provider：根据 URL 推断
 export function inferProvider(apiUrl: string): ProviderId {
   const url = apiUrl.toLowerCase();
@@ -435,6 +444,18 @@ export function allowsEmptyApiKey(apiUrl: string, provider?: ProviderId) {
 
 function stringFromUnknown(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+export class ProviderApiError extends Error {
+  status: number;
+  detail: string;
+
+  constructor(status: number, statusText: string, detail: string) {
+    super(`API 错误 (${status}${statusText ? ` ${statusText}` : ""})${detail ? `：${detail}` : ""}`);
+    this.name = "ProviderApiError";
+    this.status = status;
+    this.detail = detail;
+  }
 }
 
 function apiErrorDetailFromText(raw: string) {
@@ -459,8 +480,14 @@ function apiErrorDetailFromText(raw: string) {
 async function apiErrorFromResponse(resp: Response) {
   const raw = await resp.text().catch(() => "");
   const detail = apiErrorDetailFromText(raw);
-  const statusText = resp.statusText ? ` ${resp.statusText}` : "";
-  return new Error(`API 错误 (${resp.status}${statusText})${detail ? `：${detail}` : ""}`);
+  return new ProviderApiError(resp.status, resp.statusText || "", detail);
+}
+
+function shouldTryNonStreamFallback(error: unknown) {
+  if (error instanceof ProviderApiError) {
+    return error.status < 400 || error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
+  }
+  return true;
 }
 
 // 退避重试包装
@@ -566,8 +593,81 @@ function toOllamaMessage(message: ChatMessage) {
   };
 }
 
-// --------- OpenAI 兼容 ---------
-async function sendOpenAICompatible(opts: SendOptions): Promise<string> {
+export function previewProviderWireMessage(provider: ProviderId, message: ChatMessage) {
+  if (provider === "anthropic") return { ...message, content: toAnthropicContent(message.content) };
+  if (provider === "gemini") return { role: message.role === "assistant" ? "model" : "user", parts: toGeminiParts(message.content) };
+  if (provider === "ollama") return toOllamaMessage(message);
+  return { ...message, content: toOpenAIContent(message.content) };
+}
+
+export function buildProviderRequest(opts: SendOptions): ProviderRequestPreview {
+  const provider = opts.provider || inferProvider(opts.apiUrl);
+  if (provider === "anthropic") {
+    const url = normalizeUrl(opts.apiUrl, "/messages");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-api-key": opts.apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    };
+    const sys = opts.systemPrompt;
+    const msgs = opts.messages.filter((m) => m.role !== "system");
+    const explicitSys = chatContentToText(opts.messages.find((m) => m.role === "system")?.content || "");
+    const finalSystem = [sys, explicitSys].filter(Boolean).join("\n\n");
+    const body: Record<string, unknown> = {
+      model: opts.modelId,
+      messages: msgs.map((message) => ({ ...message, content: toAnthropicContent(message.content) })),
+      max_tokens: opts.maxTokens ?? 8192,
+      stream: true,
+    };
+    if (finalSystem) body.system = finalSystem;
+    if (opts.temperature !== undefined) body.temperature = opts.temperature;
+    return { provider, url, headers, body, streamMode: "sse" };
+  }
+  if (provider === "gemini") {
+    const base = opts.apiUrl.trim().replace(/\/+$/, "");
+    const url = `${base}/models/${opts.modelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(opts.apiKey)}`;
+    const fallbackUrl = `${base}/models/${opts.modelId}:generateContent?key=${encodeURIComponent(opts.apiKey)}`;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const sysParts: string[] = [];
+    if (opts.systemPrompt) sysParts.push(opts.systemPrompt);
+    const sysFromMsg = chatContentToText(opts.messages.find((m) => m.role === "system")?.content || "");
+    if (sysFromMsg) sysParts.push(sysFromMsg);
+    const contents = opts.messages
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: toGeminiParts(m.content) }));
+    const body: Record<string, unknown> = { contents };
+    if (sysParts.length) body.systemInstruction = { parts: [{ text: sysParts.join("\n\n") }] };
+    if (opts.temperature !== undefined || opts.maxTokens !== undefined) {
+      body.generationConfig = {
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        ...(opts.maxTokens !== undefined ? { maxOutputTokens: opts.maxTokens } : {}),
+      };
+    }
+    return { provider, url, fallbackUrl, headers, body, streamMode: "sse" };
+  }
+  if (provider === "ollama") {
+    const base = opts.apiUrl.trim().replace(/\/+$/, "");
+    if (base.endsWith("/v1")) {
+      return buildProviderRequest({ ...opts, provider: "openai-compatible", apiKey: opts.apiKey || "ollama" });
+    }
+    const url = base + "/api/chat";
+    const sys = opts.systemPrompt || chatContentToText(opts.messages.find((m) => m.role === "system")?.content || "");
+    const msgs = opts.messages.filter((m) => m.role !== "system");
+    const messages = sys
+      ? [{ role: "system" as const, content: sys }, ...msgs].map(toOllamaMessage)
+      : msgs.map(toOllamaMessage);
+    const body: Record<string, unknown> = {
+      model: opts.modelId,
+      messages,
+      stream: true,
+      options: {
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        ...(opts.maxTokens !== undefined ? { num_predict: opts.maxTokens } : {}),
+      },
+    };
+    return { provider, url, headers: { "Content-Type": "application/json" }, body, streamMode: "ndjson" };
+  }
   const url = normalizeUrl(opts.apiUrl, "/chat/completions");
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.apiKey?.trim()) headers.Authorization = `Bearer ${opts.apiKey}`;
@@ -580,6 +680,12 @@ async function sendOpenAICompatible(opts: SendOptions): Promise<string> {
   };
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+  return { provider, url, headers, body, streamMode: "sse" };
+}
+
+// --------- OpenAI 兼容 ---------
+async function sendOpenAICompatible(opts: SendOptions): Promise<string> {
+  const { url, headers, body } = buildProviderRequest({ ...opts, provider: "openai-compatible" });
 
   try {
     return await streamSSE(url, headers, body, opts.onChunk, opts.signal, (json) => {
@@ -587,6 +693,7 @@ async function sendOpenAICompatible(opts: SendOptions): Promise<string> {
     });
   } catch (e) {
     if (opts.signal?.aborted) throw e;
+    if (!shouldTryNonStreamFallback(e)) throw e;
     // fallback non-stream
     return await postJson(url, headers, { ...body, stream: false }, opts.signal, (json) => {
       const text = json.choices?.[0]?.message?.content || "";
@@ -598,26 +705,7 @@ async function sendOpenAICompatible(opts: SendOptions): Promise<string> {
 
 // --------- Anthropic Messages API ---------
 async function sendAnthropic(opts: SendOptions): Promise<string> {
-  const url = normalizeUrl(opts.apiUrl, "/messages");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "x-api-key": opts.apiKey,
-    "anthropic-version": "2023-06-01",
-    "anthropic-dangerous-direct-browser-access": "true",
-  };
-  // Anthropic 不允许 system 在 messages 里，放顶层 system
-  const sys = opts.systemPrompt;
-  const msgs = opts.messages.filter((m) => m.role !== "system");
-  const explicitSys = chatContentToText(opts.messages.find((m) => m.role === "system")?.content || "");
-  const finalSystem = [sys, explicitSys].filter(Boolean).join("\n\n");
-  const body: Record<string, unknown> = {
-    model: opts.modelId,
-    messages: msgs.map((message) => ({ ...message, content: toAnthropicContent(message.content) })),
-    max_tokens: opts.maxTokens ?? 8192,
-    stream: true,
-  };
-  if (finalSystem) body.system = finalSystem;
-  if (opts.temperature !== undefined) body.temperature = opts.temperature;
+  const { url, headers, body } = buildProviderRequest({ ...opts, provider: "anthropic" });
 
   try {
     return await streamSSE(url, headers, body, opts.onChunk, opts.signal, (json) => {
@@ -628,6 +716,7 @@ async function sendAnthropic(opts: SendOptions): Promise<string> {
     });
   } catch (e) {
     if (opts.signal?.aborted) throw e;
+    if (!shouldTryNonStreamFallback(e)) throw e;
     return await postJson(url, headers, { ...body, stream: false }, opts.signal, (json) => {
       const text = (json.content || []).map((b: { type: string; text?: string }) => (b.type === "text" ? b.text || "" : "")).join("");
       opts.onChunk?.(text);
@@ -639,24 +728,7 @@ async function sendAnthropic(opts: SendOptions): Promise<string> {
 // --------- Google Gemini ---------
 async function sendGemini(opts: SendOptions): Promise<string> {
   // Gemini URL: {base}/models/{model}:streamGenerateContent?alt=sse&key=...
-  const base = opts.apiUrl.trim().replace(/\/+$/, "");
-  const streamUrl = `${base}/models/${opts.modelId}:streamGenerateContent?alt=sse&key=${encodeURIComponent(opts.apiKey)}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const sysParts: string[] = [];
-  if (opts.systemPrompt) sysParts.push(opts.systemPrompt);
-  const sysFromMsg = chatContentToText(opts.messages.find((m) => m.role === "system")?.content || "");
-  if (sysFromMsg) sysParts.push(sysFromMsg);
-  const contents = opts.messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: toGeminiParts(m.content) }));
-  const body: Record<string, unknown> = { contents };
-  if (sysParts.length) body.systemInstruction = { parts: [{ text: sysParts.join("\n\n") }] };
-  if (opts.temperature !== undefined || opts.maxTokens !== undefined) {
-    body.generationConfig = {
-      ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-      ...(opts.maxTokens !== undefined ? { maxOutputTokens: opts.maxTokens } : {}),
-    };
-  }
+  const { url: streamUrl, fallbackUrl, headers, body } = buildProviderRequest({ ...opts, provider: "gemini" });
   try {
     return await streamSSE(streamUrl, headers, body, opts.onChunk, opts.signal, (json) => {
       const parts = json.candidates?.[0]?.content?.parts || [];
@@ -664,8 +736,8 @@ async function sendGemini(opts: SendOptions): Promise<string> {
     });
   } catch (e) {
     if (opts.signal?.aborted) throw e;
-    const fallbackUrl = `${base}/models/${opts.modelId}:generateContent?key=${encodeURIComponent(opts.apiKey)}`;
-    return await postJson(fallbackUrl, headers, body, opts.signal, (json) => {
+    if (!shouldTryNonStreamFallback(e)) throw e;
+    return await postJson(fallbackUrl || streamUrl, headers, body, opts.signal, (json) => {
       const parts = json.candidates?.[0]?.content?.parts || [];
       const text = parts.map((p: { text?: string }) => p.text || "").join("");
       opts.onChunk?.(text);
@@ -681,21 +753,9 @@ async function sendOllama(opts: SendOptions): Promise<string> {
   if (base.endsWith("/v1")) {
     return sendOpenAICompatible({ ...opts, apiKey: opts.apiKey || "ollama" });
   }
-  const url = base + "/api/chat";
-  const sys = opts.systemPrompt || chatContentToText(opts.messages.find((m) => m.role === "system")?.content || "");
-  const msgs = opts.messages.filter((m) => m.role !== "system");
-  if (sys) msgs.unshift({ role: "system", content: sys });
-  const body: Record<string, unknown> = {
-    model: opts.modelId,
-    messages: msgs.map(toOllamaMessage),
-    stream: true,
-    options: {
-      ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
-      ...(opts.maxTokens !== undefined ? { num_predict: opts.maxTokens } : {}),
-    },
-  };
+  const { url, headers, body } = buildProviderRequest({ ...opts, provider: "ollama" });
   // Ollama 用 JSONL 而不是 SSE
-  return streamNDJSON(url, { "Content-Type": "application/json" }, body, opts.onChunk, opts.signal, (json) => {
+  return streamNDJSON(url, headers, body, opts.onChunk, opts.signal, (json) => {
     return json.message?.content || "";
   });
 }

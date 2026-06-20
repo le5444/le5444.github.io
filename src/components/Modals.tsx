@@ -441,9 +441,9 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
     }
   };
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 p-4">
-      <div className={`${modalPanelClass} max-h-[82vh] max-w-3xl rounded-2xl`}>
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4 shrink-0">
+    <div className="settings-modal-overlay fixed inset-0 z-[100] flex items-start justify-center bg-black/65 p-4" data-testid="settings-modal-overlay">
+      <div className={`${modalPanelClass} settings-modal-panel max-h-[82vh] max-w-3xl rounded-2xl`} data-testid="settings-modal-panel">
+        <div className="settings-modal-header flex items-center justify-between border-b border-slate-800 px-5 py-4 shrink-0">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-cyan-200"><Settings className="h-5 w-5" /></div>
             <div>
@@ -454,9 +454,9 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
           <button onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-800 hover:text-white"><X className="h-5 w-5" /></button>
         </div>
 
-        <div className="space-y-4 overflow-y-auto px-5 py-5">
+        <div className="settings-modal-body space-y-4 overflow-y-auto px-5 py-5">
           {/* 快速预设 */}
-          <div className="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4">
+          <div className="settings-modal-section rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4" data-testid="settings-provider-presets">
             <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="flex items-center gap-2 text-sm font-medium text-purple-200"><Zap className="h-4 w-4" /> 接口预设</div>
@@ -489,7 +489,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                 );
               })}
             </div>
-            <div className="grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="settings-preset-grid grid max-h-72 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
               {filteredPresets.map((preset) => {
                 const active = activePresetId === preset.id;
                 const group = preset.group || "global";
@@ -520,7 +520,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
             </div>
           </div>
 
-          <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4">
+          <div className="settings-modal-section rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4" data-testid="settings-provider-profiles">
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="text-sm font-medium text-blue-200">常用模型配置</div>
@@ -571,7 +571,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
             )}
           </div>
 
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="settings-modal-section grid gap-5 rounded-2xl border border-slate-800 bg-slate-950/35 p-4 md:grid-cols-2" data-testid="settings-provider-manual-form">
             <div className="md:col-span-2">
               <label className="mb-1 block text-sm font-medium text-slate-300">服务商类型</label>
               <select
@@ -605,7 +605,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                 <button onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
               </div>
             </div>
-            <div className="md:col-span-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+            <div className="settings-modal-section md:col-span-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4" data-testid="settings-model-discovery">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="flex items-center gap-2 text-sm font-medium text-cyan-200"><ListChecks className="h-4 w-4" /> 模型发现</div>
@@ -783,7 +783,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
           </div>
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-800 px-5 py-4 shrink-0">
+        <div className="settings-modal-footer flex items-center justify-between border-t border-slate-800 px-5 py-4 shrink-0">
           <button onClick={() => setForm((prev) => ({ ...prev, apiUrl: "", apiKey: "", modelId: "", modelName: "", provider: undefined, temperature: 0.85, maxTokens: undefined, activeProfileId: undefined }))} className="text-sm text-red-400">重置当前配置</button>
           <div className="flex gap-3">
             <button onClick={onClose} className="rounded-2xl px-5 py-2.5 text-sm text-slate-400 hover:bg-slate-800">取消</button>

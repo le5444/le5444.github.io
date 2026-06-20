@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Brain, Loader2, MessageSquare, Send, X, Eye, Filter, Square, Wrench } from "lucide-react";
-import { chatContentToText, type ApiSettings, type ChatMessage, isConfigured, sendChat } from "../store/settings";
+import { type ApiSettings, type ChatMessage, isConfigured, sendChat } from "../store/settings";
 import { type PromptTemplate, type WorkspaceFile, type WorkspaceState } from "../store/workspace";
 import { buildDistillationPrompt, type DistilledProfile } from "../store/distillation";
 import { prompts } from "../data/prompts";
@@ -20,6 +20,7 @@ import { buildWorkflowDag, renderWorkflowDagContext, workflowDagToAdvancePayload
 import { buildAgentArchitecturePlan, renderAgentArchitectureContext } from "../utils/agent-architecture";
 import { buildCoordinatorModePlan, renderCoordinatorModeContext } from "../utils/coordinator-mode";
 import { buildAgentContextPack, renderAgentContextPack } from "../utils/agent-context-pack";
+import { buildOneShotToolFollowupPrompt, canAutoSubmitBridgeRequest, renderBridgeResultForChat, stripAgentProtocolForChatDisplay } from "../os/kernel/agent-loop-bridge";
 import { showToast } from "../utils/toast";
 import { CopyButton } from "./shared";
 
@@ -269,6 +270,7 @@ export function AIChatPanel({
   const [streamText, setStreamText] = useState("");
   const [loading, setLoading] = useState(false);
   const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+  const [showAgentSummary, setShowAgentSummary] = useState(false);
   const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
   const [approvalDrafts, setApprovalDrafts] = useState<ApprovalDraft[]>([]);
   const [bridgeRequests, setBridgeRequests] = useState<ExecutorBridgeRequest[]>([]);
@@ -700,7 +702,7 @@ export function AIChatPanel({
       presetCount: Number(catalog?.preset_count || catalogInfo.preset_count || 0),
       returned: Number(catalog?.returned || 0),
       provider: String(config.provider || ""),
-      providerLabel: String(config.provider_label || config.provider || "Provider Registry"),
+      providerLabel: String(config.provider_label || config.provider || "模型服务目录"),
       apiUrl: String(config.api_url || ""),
       modelId: String(config.model_id || ""),
       keyRequired: Boolean(readiness.key_required),
@@ -2112,11 +2114,55 @@ export function AIChatPanel({
       const subagentSnapshot = extractGatewaySubagentSnapshot(data, request.action);
       if (subagentSnapshot) upsertSubagentSnapshot(subagentSnapshot);
       appendBridgeRequestToWorkspace(next);
+      const resultText = renderBridgeResultForChat(request, data, nextStatus);
+      onMessagesChange((prev) => [...prev, { role: "assistant", content: resultText }]);
+      onAiResultsChange((prev) => [{
+        id: uid(),
+        title: `工具结果：${request.action}`,
+        source: "执行桥",
+        content: resultText,
+        createdAt: Date.now(),
+        type: "tool",
+      } as AIResult, ...prev]);
       showToast("本地 Gateway 已返回结果", nextStatus === "blocked" ? "warning" : "success");
+      return { request: next, data, status: nextStatus, text: resultText };
     } catch (error) {
       const message = error instanceof Error ? error.message : "本地 Gateway 未连接";
       showToast(`无法连接执行桥：${message}`, "warning", 5000);
+      return null;
     }
+  };
+
+  const runOneShotToolFollowup = async (params: {
+    userText: string;
+    toolRequests: ExecutorBridgeRequest[];
+    controller: AbortController;
+  }) => {
+    if (!params.toolRequests.length) return "";
+    const toolResults = (await Promise.all(params.toolRequests.map((request) => submitBridgeRequest(request))))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    if (!toolResults.length) return "";
+    const followupPrompt = buildOneShotToolFollowupPrompt({
+      userText: params.userText,
+      toolResultTexts: toolResults.map((item) => item.text),
+    });
+    const followup = await sendChat(
+      settings,
+      [{ role: "user", content: followupPrompt }],
+      (t) => setStreamText(stripAgentProtocolForChatDisplay(t, "AI 正在根据工具结果继续...")),
+      params.controller.signal,
+    );
+    const displayFollowup = stripAgentProtocolForChatDisplay(followup, "AI 已读取工具结果。");
+    onMessagesChange((prev) => [...prev, { role: "assistant", content: displayFollowup }]);
+    onAiResultsChange((prev) => [{
+      id: uid(),
+      title: `续答：${params.userText.slice(0, 15)}`,
+      source: "工具续答",
+      content: displayFollowup,
+      createdAt: Date.now(),
+      type: "manual",
+    } as AIResult, ...prev]);
+    return displayFollowup;
   };
 
   const sendCore = async (raw: string, opts: Partial<PendingPrompt> = {}) => {
@@ -2168,21 +2214,32 @@ export function AIChatPanel({
     setLoading(true); setStreamText("");
     const controller = new AbortController(); abortRef.current = controller;
     try {
-      const res = await sendChat(settings, [{ role: "user", content: payload }], (t) => setStreamText(t), controller.signal);
-      onMessagesChange(p => [...p, { role: "assistant", content: res }]);
-      onAiResultsChange(p => [{ id: uid(), title: opts.resultTitle || userText.slice(0, 15), source: opts.replaceMode ? "改写" : "指令", content: res, createdAt: Date.now(), type: opts.forResult ? "tool" : "manual" } as AIResult, ...p]);
+      const res = await sendChat(settings, [{ role: "user", content: payload }], (t) => setStreamText(stripAgentProtocolForChatDisplay(t, "AI 正在处理...")), controller.signal);
+      const displayRes = stripAgentProtocolForChatDisplay(res, "AI 暂无可显示内容。");
+      onMessagesChange(p => [...p, { role: "assistant", content: displayRes }]);
+      onAiResultsChange(p => [{ id: uid(), title: opts.resultTitle || userText.slice(0, 15), source: opts.replaceMode ? "改写" : "指令", content: displayRes, createdAt: Date.now(), type: opts.forResult ? "tool" : "manual" } as AIResult, ...p]);
       const drafts = extractApprovalDraftsFromText(res);
       if (drafts.length) setApprovalDrafts((prev) => [...drafts, ...prev].slice(0, 10));
       const bridgeDrafts = extractExecutorBridgeRequestsFromText(res, runExecutorBridge);
       if (bridgeDrafts.length) {
         setBridgeRequests((prev) => [...bridgeDrafts, ...prev].slice(0, 10));
-        showToast(`收到 ${bridgeDrafts.length} 个执行桥请求`, "info");
+        const autoSubmitRequests = bridgeDrafts.filter(canAutoSubmitBridgeRequest);
+        showToast(autoSubmitRequests.length ? `收到 ${bridgeDrafts.length} 个执行桥请求，自动提交 ${autoSubmitRequests.length} 个只读请求` : `收到 ${bridgeDrafts.length} 个执行桥请求`, "info");
+        const followupRes = await runOneShotToolFollowup({ userText, toolRequests: autoSubmitRequests, controller });
+        if (followupRes) {
+          const completedRun = completeAgentRun(agentRun, followupRes);
+          upsertAgentRun(completedRun);
+          appendRunToMemory(completedRun);
+          appendRunToKairos(completedRun);
+          if (opts.replaceMode) onReplaceSelectionInEditor(followupRes);
+          return;
+        }
       }
-      const completedRun = completeAgentRun(agentRun, res);
+      const completedRun = completeAgentRun(agentRun, displayRes);
       upsertAgentRun(completedRun);
       appendRunToMemory(completedRun);
       appendRunToKairos(completedRun);
-      if (opts.replaceMode) onReplaceSelectionInEditor(res);
+      if (opts.replaceMode) onReplaceSelectionInEditor(displayRes);
     } catch (e) {
       if (controller.signal.aborted) {
         const abortedRun = failAgentRun(agentRun, "用户停止生成", "aborted");
@@ -2226,7 +2283,7 @@ export function AIChatPanel({
           messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[90%] rounded-2xl px-4 py-2.5 text-sm ${m.role === "user" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-200"}`}>
-                <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed">{chatContentToText(m.content)}</pre>
+                <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed">{stripAgentProtocolForChatDisplay(m.content, "AI 暂无可显示内容。")}</pre>
               </div>
             </div>
           ))
@@ -2286,78 +2343,92 @@ export function AIChatPanel({
       {tab === "chat" && (
           <div className="shrink-0 border-t border-slate-800 p-3 space-y-2">
           <div className="rounded-xl border border-slate-800 bg-slate-950/45 px-3 py-2">
-            <div className="mb-2 flex items-center justify-between gap-2 text-[10px] text-slate-500">
-              <span className="flex items-center gap-1.5"><Brain className="h-3 w-3" /> AI 工作台</span>
-              <span className={agentPreview.memories.length ? "text-cyan-300" : "text-slate-500"}>记忆 {agentPreview.memories.length}</span>
-              <span className={routedSkillPreview.length ? "text-purple-300" : "text-slate-500"}>路由 {routedSkillPreview.length}</span>
-              <span className={toolRoutePreview.approvalRequired ? "text-amber-300" : "text-emerald-300"}>工具 {toolRoutePreview.tools.length}</span>
-              <span className={executorBridgePreview.mode === "dry-run" ? "text-emerald-300" : "text-amber-300"}>执行桥 {executorBridgePreview.mode}</span>
-              <span className={bridgeRequests.some((request) => request.status === "draft") ? "text-blue-300" : "text-slate-500"}>桥请求 {bridgeRequests.filter((request) => request.status === "draft").length}</span>
-              <span className="text-cyan-300">DAG {workflowDagPreview.nodes.length}</span>
-              <span className={agentRuns.length ? "text-emerald-300" : "text-slate-500"}>运行 {agentRuns.length}</span>
-              <span className={workflowSnapshots.length ? "text-cyan-300" : "text-slate-500"}>流程 {workflowSnapshots.length}</span>
-              <span className={kairosSnapshots.length ? "text-fuchsia-300" : "text-slate-500"}>KAIROS {kairosSnapshots.length}</span>
-              <span className={schedulerSnapshots.length ? "text-orange-300" : "text-slate-500"}>定时 {schedulerSnapshots.length}</span>
-              <span className={workerSnapshots.length ? "text-sky-300" : "text-slate-500"}>任务 {workerSnapshots.length}</span>
-              <span className={providerSnapshots.length ? "text-indigo-300" : "text-slate-500"}>接口 {providerSnapshots.length}</span>
-              <span className={memorySnapshots.length ? "text-emerald-300" : "text-slate-500"}>记忆 {memorySnapshots.length}</span>
-              <span className={skillSnapshots.length ? "text-purple-300" : "text-slate-500"}>技能 {skillSnapshots.length}</span>
-              <span className={sandboxSnapshots.length ? "text-amber-300" : "text-slate-500"}>沙盒 {sandboxSnapshots.length}</span>
-              <span className={phaseAuditSnapshots.length ? "text-lime-300" : "text-slate-500"}>阶段 {phaseAuditSnapshots.length}</span>
-              <span className={userModelSnapshots.length ? "text-pink-300" : "text-slate-500"}>画像 {userModelSnapshots.length}</span>
-              <span className={subagentSnapshots.length ? "text-blue-300" : "text-slate-500"}>AG {subagentSnapshots.length}</span>
-              <span className="text-indigo-300">架构 {agentArchitecturePreview.sources.length}</span>
-              <span className={skillAssemblyPreview.activeCoreSkills.length ? "text-fuchsia-300" : "text-slate-500"}>核心Skill {skillAssemblyPreview.activeCoreSkills.length}</span>
-              <span className={swarmPlanPreview.conflicts.length ? "text-red-300" : "text-blue-300"}>子代理 {swarmPlanPreview.agents.length}</span>
-              <span className={rawContextChars > MAX_EDITOR_CONTEXT_CHARS ? "text-amber-300" : "text-slate-500"}>{Math.round(rawContextChars / 1000)}k</span>
-              <button onClick={() => onOpenPreview(composePreview(input || "请根据以上上下文继续辅助创作。"))} className="text-slate-400 hover:text-white">预览</button>
+            <div className="mb-2 flex items-center justify-between gap-3 text-[10px] text-slate-500">
+              <button
+                type="button"
+                onClick={() => setShowAgentSummary((prev) => !prev)}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-slate-200"
+              >
+                <Brain className="h-3 w-3 shrink-0" />
+                <span className="truncate">AI 工作台</span>
+                <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">域 {personalOSPreview.domain}</span>
+                <span className={toolRoutePreview.approvalRequired ? "shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-300" : "shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300"}>工具 {toolRoutePreview.tools.length}</span>
+                <span className="shrink-0 rounded bg-cyan-500/10 px-1.5 py-0.5 text-cyan-300">上下文 {agentContextPackPreview.budget.mode}</span>
+                <span className="shrink-0 text-slate-600">{showAgentSummary ? "收起" : "展开"}</span>
+              </button>
+              <button onClick={() => onOpenPreview(composePreview(input || "请根据以上上下文继续辅助创作。"))} className="shrink-0 text-slate-400 hover:text-white">预览</button>
             </div>
-            <div className="mb-2 flex flex-wrap gap-1.5 text-[10px]">
-              <span className="rounded-lg bg-slate-800 px-2 py-1 text-slate-400">域 {personalOSPreview.domain}</span>
-              <span className="rounded-lg bg-slate-800 px-2 py-1 text-slate-400">阶段 {personalOSPreview.phase}</span>
-              <span className={personalOSPreview.risk === "high" ? "rounded-lg bg-red-500/10 px-2 py-1 text-red-300" : personalOSPreview.risk === "medium" ? "rounded-lg bg-amber-500/10 px-2 py-1 text-amber-300" : "rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300"}>
-                风险 {personalOSPreview.risk}
-              </span>
-              <span className="rounded-lg bg-slate-800 px-2 py-1 text-slate-400">意图 {agentPreview.plan.intent}</span>
-              <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">上下文 {agentContextPackPreview.budget.mode}</span>
-              <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">队列 {agentContextPackPreview.bridgeQueue.length}</span>
-              <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">AutoDream L1/L2</span>
-              <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">工作流 {workflowDagPreview.currentNodeId}</span>
-              <span className="rounded-lg bg-amber-500/10 px-2 py-1 text-amber-300">7层防线 {toolRoutePreview.safetyLayers.length}</span>
-              <span className="rounded-lg bg-red-500/10 px-2 py-1 text-red-300">命令验证 {COMMAND_VALIDATORS.length}</span>
-              <span className="rounded-lg bg-blue-500/10 px-2 py-1 text-blue-300">写锁 {swarmPlanPreview.locks.filter((lock) => lock.mode === "write").length}</span>
-              <span className="rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300">MCP Bridge</span>
-              <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">接口中枢</span>
-              <span className="rounded-lg bg-purple-500/10 px-2 py-1 text-purple-300">审批协议</span>
-              <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">架构镜像 {agentArchitecturePreview.layers.filter((layer) => layer.status === "absorbed").length}/{agentArchitecturePreview.layers.length}</span>
-              {(personalOSPreview.goalMode || personalOSPreview.domain === "automation") && (
-                <span className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-fuchsia-300">KAIROS草案</span>
-              )}
-              {agentArchitecturePreview.sources.slice(0, 3).map((source) => (
-                <span key={source.key} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">
-                  {source.label}
-                </span>
-              ))}
-              {personalOSPreview.tools.slice(0, 3).map((tool) => (
-                <span key={tool.key} className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300">
-                  <Wrench className="h-3 w-3" /> {tool.label}
-                </span>
-              ))}
-              {personalOSPreview.subagents.slice(0, 2).map((agent) => (
-                <span key={agent.key} className="rounded-lg bg-blue-500/10 px-2 py-1 text-blue-300">
-                  {agent.label}
-                </span>
-              ))}
-            </div>
+            {showAgentSummary && (
+              <>
+                <div className="mb-2 flex flex-wrap gap-2 text-[10px] text-slate-500">
+                  <span className={agentPreview.memories.length ? "text-cyan-300" : "text-slate-500"}>记忆 {agentPreview.memories.length}</span>
+                  <span className={routedSkillPreview.length ? "text-purple-300" : "text-slate-500"}>路由 {routedSkillPreview.length}</span>
+                  <span className={executorBridgePreview.mode === "dry-run" ? "text-emerald-300" : "text-amber-300"}>执行桥 {executorBridgePreview.mode}</span>
+                  <span className={bridgeRequests.some((request) => request.status === "draft") ? "text-blue-300" : "text-slate-500"}>桥请求 {bridgeRequests.filter((request) => request.status === "draft").length}</span>
+                  <span className="text-cyan-300">流程 {workflowDagPreview.nodes.length}</span>
+                  <span className={agentRuns.length ? "text-emerald-300" : "text-slate-500"}>运行 {agentRuns.length}</span>
+                  <span className={workflowSnapshots.length ? "text-cyan-300" : "text-slate-500"}>流程 {workflowSnapshots.length}</span>
+                  <span className={kairosSnapshots.length ? "text-fuchsia-300" : "text-slate-500"}>观察 {kairosSnapshots.length}</span>
+                  <span className={schedulerSnapshots.length ? "text-orange-300" : "text-slate-500"}>定时 {schedulerSnapshots.length}</span>
+                  <span className={workerSnapshots.length ? "text-sky-300" : "text-slate-500"}>任务 {workerSnapshots.length}</span>
+                  <span className={providerSnapshots.length ? "text-indigo-300" : "text-slate-500"}>接口 {providerSnapshots.length}</span>
+                  <span className={memorySnapshots.length ? "text-emerald-300" : "text-slate-500"}>记忆 {memorySnapshots.length}</span>
+                  <span className={skillSnapshots.length ? "text-purple-300" : "text-slate-500"}>技能 {skillSnapshots.length}</span>
+                  <span className={sandboxSnapshots.length ? "text-amber-300" : "text-slate-500"}>沙盒 {sandboxSnapshots.length}</span>
+                  <span className={phaseAuditSnapshots.length ? "text-lime-300" : "text-slate-500"}>阶段 {phaseAuditSnapshots.length}</span>
+                  <span className={userModelSnapshots.length ? "text-pink-300" : "text-slate-500"}>画像 {userModelSnapshots.length}</span>
+                  <span className={subagentSnapshots.length ? "text-blue-300" : "text-slate-500"}>AG {subagentSnapshots.length}</span>
+                  <span className="text-indigo-300">架构 {agentArchitecturePreview.sources.length}</span>
+                  <span className={skillAssemblyPreview.activeCoreSkills.length ? "text-fuchsia-300" : "text-slate-500"}>核心能力 {skillAssemblyPreview.activeCoreSkills.length}</span>
+                  <span className={swarmPlanPreview.conflicts.length ? "text-red-300" : "text-blue-300"}>子代理 {swarmPlanPreview.agents.length}</span>
+                  <span className={rawContextChars > MAX_EDITOR_CONTEXT_CHARS ? "text-amber-300" : "text-slate-500"}>{Math.round(rawContextChars / 1000)}k</span>
+                </div>
+                <div className="mb-2 flex flex-wrap gap-1.5 text-[10px]">
+                  <span className="rounded-lg bg-slate-800 px-2 py-1 text-slate-400">阶段 {personalOSPreview.phase}</span>
+                  <span className={personalOSPreview.risk === "high" ? "rounded-lg bg-red-500/10 px-2 py-1 text-red-300" : personalOSPreview.risk === "medium" ? "rounded-lg bg-amber-500/10 px-2 py-1 text-amber-300" : "rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300"}>
+                    风险 {personalOSPreview.risk}
+                  </span>
+                  <span className="rounded-lg bg-slate-800 px-2 py-1 text-slate-400">意图 {agentPreview.plan.intent}</span>
+                  <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">队列 {agentContextPackPreview.bridgeQueue.length}</span>
+                  <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">长期记忆</span>
+                  <span className="rounded-lg bg-cyan-500/10 px-2 py-1 text-cyan-300">当前步骤 {workflowDagPreview.currentNodeId}</span>
+                  <span className="rounded-lg bg-amber-500/10 px-2 py-1 text-amber-300">7层防线 {toolRoutePreview.safetyLayers.length}</span>
+                  <span className="rounded-lg bg-red-500/10 px-2 py-1 text-red-300">命令验证 {COMMAND_VALIDATORS.length}</span>
+                  <span className="rounded-lg bg-blue-500/10 px-2 py-1 text-blue-300">写锁 {swarmPlanPreview.locks.filter((lock) => lock.mode === "write").length}</span>
+                  <span className="rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300">本地工具桥</span>
+                  <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">模型中枢</span>
+                  <span className="rounded-lg bg-purple-500/10 px-2 py-1 text-purple-300">审批协议</span>
+                  <span className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">架构镜像 {agentArchitecturePreview.layers.filter((layer) => layer.status === "absorbed").length}/{agentArchitecturePreview.layers.length}</span>
+                  {(personalOSPreview.goalMode || personalOSPreview.domain === "automation") && (
+                    <span className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-fuchsia-300">长期观察草案</span>
+                  )}
+                  {agentArchitecturePreview.sources.slice(0, 3).map((source) => (
+                    <span key={source.key} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-indigo-300">
+                      {source.label}
+                    </span>
+                  ))}
+                  {personalOSPreview.tools.slice(0, 3).map((tool) => (
+                    <span key={tool.key} className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-1 text-emerald-300">
+                      <Wrench className="h-3 w-3" /> {tool.label}
+                    </span>
+                  ))}
+                  {personalOSPreview.subagents.slice(0, 2).map((agent) => (
+                    <span key={agent.key} className="rounded-lg bg-blue-500/10 px-2 py-1 text-blue-300">
+                      {agent.label}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="flex flex-wrap gap-1.5">
               <button onClick={onOpenPromptPicker} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">
-                Skills {selectedPrompts.length}
+                能力 {selectedPrompts.length}
               </button>
               <button
                 onClick={() => onWorkspaceChange(prev => ({ ...prev, includeSmartContext: !(prev.includeSmartContext ?? true) }))}
                 className={`rounded-lg px-2 py-1 text-[10px] ${(workspace.includeSmartContext ?? true) ? "bg-cyan-500/10 text-cyan-300" : "bg-slate-800 text-slate-500"}`}
               >
-                OS记忆 {(workspace.includeSmartContext ?? true) ? "开" : "关"}
+                智能记忆 {(workspace.includeSmartContext ?? true) ? "开" : "关"}
               </button>
               <button onClick={onOpenFileAssociate} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
                 关联文件 {associatedFiles.length}
@@ -2371,74 +2442,11 @@ export function AIChatPanel({
               >
                 当前正文 {workspace.includeEditorContext ? "开" : "关"}
               </button>
-              <button onClick={() => createWorkflowBridgeRequest("run")} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">
-                登记DAG
-              </button>
-              <button onClick={() => createWorkflowBridgeRequest("advance")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
-                推进DAG
-              </button>
-              <button onClick={() => createWorkflowBridgeRequest("status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                桥状态
-              </button>
-              <button onClick={createKairosBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">
-                登记KAIROS
-              </button>
-              <button onClick={createKairosTickBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">
-                KAIROS Tick
-              </button>
-              <button onClick={createEvolutionBootstrapBridgeRequest} className="rounded-lg bg-pink-500/10 px-2 py-1 text-[10px] text-pink-300 hover:bg-pink-500/20">
-                进化验收
-              </button>
-              <button onClick={() => createSchedulerBridgeRequest("scheduler_plan")} className="rounded-lg bg-orange-500/10 px-2 py-1 text-[10px] text-orange-300 hover:bg-orange-500/20">
-                计划定时
-              </button>
-              <button onClick={() => createSchedulerBridgeRequest("scheduler_install")} className="rounded-lg bg-orange-500/10 px-2 py-1 text-[10px] text-orange-300 hover:bg-orange-500/20">
-                安装定时
-              </button>
-              <button onClick={() => createSchedulerBridgeRequest("scheduler_uninstall")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">
-                移除定时
-              </button>
-              <button onClick={() => createSchedulerBridgeRequest("scheduler_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">
-                定时状态
-              </button>
-              <button onClick={() => createWorkerBridgeRequest("worker_run")} className="rounded-lg bg-sky-500/10 px-2 py-1 text-[10px] text-sky-300 hover:bg-sky-500/20">
-                跑Worker
-              </button>
-              <button onClick={createModelWorkerBridgeRequest} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">
-                模型Worker
-              </button>
-              <button onClick={() => createProviderBridgeRequest("provider_catalog")} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">
-                接口库
-              </button>
-              <button onClick={() => createProviderBridgeRequest("provider_status")} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">
-                接口状态
-              </button>
-              <button onClick={() => createProviderBridgeRequest("provider_probe")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
-                模型探针
-              </button>
               <button onClick={createContextPackBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">
                 生成上下文
               </button>
-              <button onClick={() => createSkillBridgeRequest("skill_route")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">
-                路由技能
-              </button>
               <button onClick={() => createFileToolBridgeRequest("read_file")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
                 读文件
-              </button>
-              <button onClick={() => createFileToolBridgeRequest("write_file", false)} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
-                写草案
-              </button>
-              <button onClick={() => createFileToolBridgeRequest("write_file", true)} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">
-                工作区写入
-              </button>
-              <button onClick={() => createFileToolBridgeRequest("read_file", false, "full_access")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">
-                完全读
-              </button>
-              <button onClick={() => createFileToolBridgeRequest("write_file", true, "full_access")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">
-                完全写入
-              </button>
-              <button onClick={createCommandBridgeRequest} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">
-                验证命令
               </button>
               <button onClick={onSaveHistory} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">保存对话</button>
               <button onClick={onOpenHistory} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">历史</button>
@@ -2451,15 +2459,31 @@ export function AIChatPanel({
             </div>
             {showAdvancedTools && (
               <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-800 pt-2">
+                <button onClick={() => createWorkflowBridgeRequest("run")} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">登记流程</button>
+                <button onClick={() => createWorkflowBridgeRequest("advance")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">推进流程</button>
+                <button onClick={() => createWorkflowBridgeRequest("status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">桥状态</button>
+                <button onClick={createKairosBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">登记观察</button>
+                <button onClick={createKairosTickBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">运行观察</button>
+                <button onClick={createEvolutionBootstrapBridgeRequest} className="rounded-lg bg-pink-500/10 px-2 py-1 text-[10px] text-pink-300 hover:bg-pink-500/20">进化验收</button>
+                <button onClick={() => createSchedulerBridgeRequest("scheduler_plan")} className="rounded-lg bg-orange-500/10 px-2 py-1 text-[10px] text-orange-300 hover:bg-orange-500/20">计划定时</button>
+                <button onClick={() => createSchedulerBridgeRequest("scheduler_install")} className="rounded-lg bg-orange-500/10 px-2 py-1 text-[10px] text-orange-300 hover:bg-orange-500/20">安装定时</button>
+                <button onClick={() => createSchedulerBridgeRequest("scheduler_uninstall")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">移除定时</button>
+                <button onClick={() => createSchedulerBridgeRequest("scheduler_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">定时状态</button>
+                <button onClick={() => createWorkerBridgeRequest("worker_run")} className="rounded-lg bg-sky-500/10 px-2 py-1 text-[10px] text-sky-300 hover:bg-sky-500/20">跑任务</button>
                 <button onClick={() => createWorkerBridgeRequest("worker_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">任务状态</button>
                 <button onClick={() => createWorkerBridgeRequest("worker_merge_proposal")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">合并草案</button>
                 <button onClick={() => createWorkerBridgeRequest("worker_cancel")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">取消任务</button>
+                <button onClick={createModelWorkerBridgeRequest} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">模型任务</button>
+                <button onClick={() => createProviderBridgeRequest("provider_catalog")} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">模型目录</button>
+                <button onClick={() => createProviderBridgeRequest("provider_status")} className="rounded-lg bg-indigo-500/10 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">模型状态</button>
+                <button onClick={() => createProviderBridgeRequest("provider_probe")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">模型探针</button>
                 <button onClick={() => createMemoryBridgeRequest("memory_status")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">记忆状态</button>
                 <button onClick={() => createMemoryBridgeRequest("memory_retrieve")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">检索记忆</button>
                 <button onClick={() => createMemoryBridgeRequest("memory_bootstrap")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">记忆验收</button>
                 <button onClick={() => createMemoryBridgeRequest("memory_consolidate")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">压缩记忆</button>
+                <button onClick={() => createSkillBridgeRequest("skill_route")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">路由技能</button>
                 <button onClick={() => createSkillBridgeRequest("skill_invoke")} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">调用技能</button>
-                <button onClick={createLocalSkillInvokeBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">本地Skill</button>
+                <button onClick={createLocalSkillInvokeBridgeRequest} className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[10px] text-fuchsia-300 hover:bg-fuchsia-500/20">本地能力</button>
                 <button onClick={() => createSkillBridgeRequest("skill_bootstrap")} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">技能验收</button>
                 <button onClick={() => createSkillBridgeRequest("skill_crystallize")} className="rounded-lg bg-purple-500/10 px-2 py-1 text-[10px] text-purple-300 hover:bg-purple-500/20">技能结晶</button>
                 <button onClick={() => createSkillBridgeRequest("skill_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">技能状态</button>
@@ -2467,9 +2491,14 @@ export function AIChatPanel({
                 <button onClick={() => createSkillBridgeRequest("skill_activate")} className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-300 hover:bg-emerald-500/20">激活技能</button>
                 <button onClick={() => createSkillBridgeRequest("skill_run")} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">运行技能</button>
                 <button onClick={createWebFetchBridgeRequest} className="rounded-lg bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-300 hover:bg-cyan-500/20">读取网页</button>
-                <button onClick={createMcpCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">MCP Call</button>
+                <button onClick={createMcpCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">工具调用</button>
                 <button onClick={createMcpStdioCatalogBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">工具目录</button>
                 <button onClick={createMcpStdioCallBridgeRequest} className="rounded-lg bg-violet-500/10 px-2 py-1 text-[10px] text-violet-300 hover:bg-violet-500/20">本地工具</button>
+                <button onClick={() => createFileToolBridgeRequest("write_file", false)} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">写草案</button>
+                <button onClick={() => createFileToolBridgeRequest("write_file", true)} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">工作区写入</button>
+                <button onClick={() => createFileToolBridgeRequest("read_file", false, "full_access")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">完全读</button>
+                <button onClick={() => createFileToolBridgeRequest("write_file", true, "full_access")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">完全写入</button>
+                <button onClick={createCommandBridgeRequest} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">验证命令</button>
                 <button onClick={() => createSandboxBridgeRequest("sandbox_probe")} className="rounded-lg bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/20">沙盒探针</button>
                 <button onClick={() => createSandboxBridgeRequest("sandbox_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">沙盒状态</button>
                 <button onClick={createPhaseAuditBridgeRequest} className="rounded-lg bg-lime-500/10 px-2 py-1 text-[10px] text-lime-300 hover:bg-lime-500/20">阶段审计</button>
@@ -2482,7 +2511,7 @@ export function AIChatPanel({
                 <button onClick={() => createUserModelBridgeRequest("user_model_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">用户模型</button>
                 <button onClick={() => createSubagentBridgeRequest("subagent_spawn")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">登记代理</button>
                 <button onClick={() => createSubagentBridgeRequest("lock_acquire")} className="rounded-lg bg-red-500/10 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/20">申请写锁</button>
-                <button onClick={() => createSubagentBridgeRequest("swarm_bootstrap")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">Swarm验收</button>
+                <button onClick={() => createSubagentBridgeRequest("swarm_bootstrap")} className="rounded-lg bg-blue-500/10 px-2 py-1 text-[10px] text-blue-300 hover:bg-blue-500/20">协作验收</button>
                 <button onClick={() => createSubagentBridgeRequest("subagent_status")} className="rounded-lg bg-slate-800 px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-700">代理状态</button>
               </div>
             )}

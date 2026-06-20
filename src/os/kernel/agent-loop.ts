@@ -12,10 +12,12 @@ import { buildAgentContextPack, renderAgentContextPack } from "../../utils/agent
 import { buildToolRouteBundle } from "../../utils/tool-registry";
 import { sendRawChat, type ApiSettings, type ChatMessage } from "../../store/settings";
 import { buildExecutorBridgeManifest, extractExecutorBridgeRequestsFromText } from "../../utils/executor-bridge";
+import { buildWriteFileDiffDraftFromPayload } from "../../utils/write-file-diff-draft";
 import { assembleSkills } from "../../utils/skill-registry";
 import { buildWorkflowDag } from "../../utils/workflow-dag";
 import { htmlToPlainText } from "../../utils/helpers";
 import type { PromptTemplate, WorkspaceFile } from "../../store/workspace";
+import { buildOneShotToolFollowupPrompt } from "./agent-loop-bridge";
 
 // ─── 类型 ────────────────────────────────────────────────
 
@@ -39,11 +41,24 @@ export interface AgentState {
   finalSummary: string;
 }
 
+export type AgentStopReason =
+  | "completed"
+  | "max_iterations"
+  | "model_error"
+  | "gateway_error"
+  | "approval_required"
+  | "no_progress";
+
 export interface AgentResult {
   success: boolean;
   summary: string;
   toolCalls: number;
   iterations: number;
+  stopReason: AgentStopReason;
+  lastPhase: AgentPhase;
+  toolResults: AgentToolResult[];
+  pendingApprovals: AgentPendingApproval[];
+  pendingReviews: AgentPendingReview[];
   error?: string;
 }
 
@@ -53,10 +68,29 @@ export interface AgentToolResult {
   status: string;
   resultText: string;
   resultJson?: Record<string, unknown>;
+  reviewGate?: "changes_diff";
+  diffDraft?: ReturnType<typeof buildWriteFileDiffDraftFromPayload>;
   approvalId?: string;
   runId?: string;
   agentContext?: Record<string, unknown>;
   at: number;
+}
+
+export interface AgentPendingApproval {
+  approvalId: string;
+  action: string;
+  purpose: string;
+  status: string;
+}
+
+export interface AgentPendingReview {
+  reviewId: string;
+  gate: "changes_diff";
+  action: string;
+  purpose: string;
+  status: string;
+  targetPaths: string[];
+  hunkCount: number;
 }
 
 // ─── Gateway 对接 ─────────────────────────────────────────
@@ -177,6 +211,189 @@ function shouldExecuteReadOnlyBridgeAction(action: string) {
   return action === "read_file" || action === "workspace_scan";
 }
 
+function isErrorToolStatus(status: string) {
+  const normalized = status.trim().toLowerCase();
+  return ["error", "failed", "fail", "rejected", "denied"].includes(normalized);
+}
+
+function isPendingApprovalTool(result: AgentToolResult) {
+  if (result.approvalId) return true;
+  const normalized = result.status.trim().toLowerCase();
+  return normalized.includes("approval") || normalized === "pending" || normalized === "queued" || normalized === "diff_draft";
+}
+
+function collectPendingApprovals(results: AgentToolResult[]): AgentPendingApproval[] {
+  const seen = new Set<string>();
+  return results.flatMap((result) => {
+    const root = asRecord(result.resultJson);
+    const approvalId = result.approvalId || asString(root.approval_id) || asString(root.approvalId);
+    if (!approvalId || seen.has(approvalId)) return [];
+    seen.add(approvalId);
+    return [{
+      approvalId,
+      action: result.action,
+      purpose: result.purpose,
+      status: result.status,
+    }];
+  });
+}
+
+function collectPendingReviews(results: AgentToolResult[]): AgentPendingReview[] {
+  const seen = new Set<string>();
+  return results.flatMap((result) => {
+    if (result.reviewGate !== "changes_diff" || result.status !== "diff_draft" || !result.diffDraft) return [];
+    const firstTargetPath = result.diffDraft.targetPaths[0] || "changes";
+    const reviewId = [
+      "changes-diff",
+      result.diffDraft.proposal.request_id || "",
+      firstTargetPath,
+      result.diffDraft.hunks.length,
+    ].filter(Boolean).join(":");
+    if (!reviewId || seen.has(reviewId)) return [];
+    seen.add(reviewId);
+    return [{
+      reviewId,
+      gate: "changes_diff" as const,
+      action: result.action,
+      purpose: result.purpose,
+      status: result.status,
+      targetPaths: result.diffDraft.targetPaths,
+      hunkCount: result.diffDraft.hunks.length,
+    }];
+  });
+}
+
+function completedToolLines(results: AgentToolResult[]) {
+  return results.flatMap((result) => {
+    if (isPendingApprovalTool(result) || isErrorToolStatus(result.status)) return [];
+    const normalized = result.status.trim().toLowerCase();
+    if (!["ok", "pass", "completed", "executed", "partial"].includes(normalized)) return [];
+    return [`${result.action} · ${result.purpose} · ${result.status}`];
+  });
+}
+
+export function agentLoopStopReasonFromToolResults(results: AgentToolResult[]): AgentStopReason {
+  if (results.some((result) => isErrorToolStatus(result.status))) return "gateway_error";
+  if (results.some(isPendingApprovalTool)) return "approval_required";
+  return "no_progress";
+}
+
+export function buildAgentLoopApprovalPauseSummary(results: AgentToolResult[]) {
+  const pendingApprovals = collectPendingApprovals(results);
+  const pendingReviews = collectPendingReviews(results);
+  const completedLines = completedToolLines(results);
+  const pendingLines = pendingApprovals.map((approval, index) => (
+    `${index + 1}. ${approval.action} · ${approval.purpose} · ${approval.approvalId}`
+  ));
+  const reviewLines = pendingReviews.map((review, index) => (
+    `${index + 1}. ${review.action} · ${review.purpose} · ${review.hunkCount} 个 hunk · ${review.targetPaths.join(" / ")}`
+  ));
+  return [
+    pendingReviews.length ? "Agent Loop 已暂停，等待 Diff 审查或审批。" : "Agent Loop 已暂停，等待审批。",
+    "不会继续调用模型，也不会声称文件、命令或外部状态已经完成。",
+    completedLines.length ? "本轮已完成工具：" : "",
+    ...completedLines.map((line, index) => `${index + 1}. ${line}`),
+    reviewLines.length ? "待审 Diff：" : "",
+    ...reviewLines,
+    pendingLines.length ? "待审批：" : "",
+    ...pendingLines,
+  ].filter(Boolean).join("\n");
+}
+
+function buildAgentResult(
+  state: AgentState,
+  modelToolCallCount: number,
+  stopReason: AgentStopReason,
+  summary: string,
+  error?: string,
+): AgentResult {
+  const pendingApprovals = collectPendingApprovals(state.toolResults);
+  const pendingReviews = collectPendingReviews(state.toolResults);
+  return {
+    success: stopReason === "completed",
+    summary,
+    toolCalls: modelToolCallCount,
+    iterations: state.iteration,
+    stopReason,
+    lastPhase: state.phase,
+    toolResults: [...state.toolResults],
+    pendingApprovals,
+    pendingReviews,
+    ...(error ? { error } : {}),
+  };
+}
+
+function buildWriteFileDiffToolResult(
+  payload: Record<string, unknown>,
+  purpose: string,
+  agentContext: Record<string, unknown>,
+  at = Date.now(),
+): AgentToolResult {
+  const fallbackPath = asString(agentContext.default_write_path) || "bridge/agent-files/command-center-plan.md";
+  const draft = buildWriteFileDiffDraftFromPayload({
+    payload,
+    fallbackPath,
+    purpose,
+    requestId: asString(agentContext.request_id),
+    round: Number(agentContext.loop_iteration || 0) || undefined,
+  });
+  if (!draft) {
+    return {
+      action: "write_file",
+      purpose,
+      status: "blocked",
+      resultText: "write_file 请求未包含可审查的 path/content，已阻止提交 Gateway。",
+      resultJson: {
+        status: "blocked",
+        action: "write_file",
+        approval_required: true,
+        review_gate: "Changes / Diff",
+        message: "write_file 请求未包含可审查的 path/content，已阻止提交 Gateway。",
+      },
+      reviewGate: "changes_diff",
+      agentContext,
+      at,
+    };
+  }
+  return {
+    action: "write_file",
+    purpose,
+    status: "diff_draft",
+    resultText: [
+      `write_file 已转为 Changes / Diff 草案：${draft.targetPaths.length} 个文件、${draft.hunks.length} 个待审 hunk。`,
+      "Agent Loop 已暂停，不会直接写入文件；请在 Changes / Diff 接受 hunk 后再生成 write_file 审批。",
+      draft.targetPaths.map((path, index) => `${index + 1}. ${path}`).join("\n"),
+    ].filter(Boolean).join("\n"),
+    resultJson: {
+      status: "diff_draft",
+      action: "write_file",
+      approval_required: true,
+      review_gate: "Changes / Diff",
+      message: `write_file 已转为 Changes / Diff 草案：${draft.targetPaths.length} 个文件、${draft.hunks.length} 个待审 hunk。`,
+      diff_draft: {
+        detail: draft.detail,
+        target_paths: draft.targetPaths,
+        file_count: draft.targetPaths.length,
+        hunk_count: draft.hunks.length,
+        proposal: draft.proposal,
+        hunks: draft.hunks.map((hunk) => ({
+          id: hunk.id,
+          file_id: hunk.fileId,
+          target_path: hunk.targetPath,
+          mode: hunk.mode,
+          access_profile: hunk.accessProfile,
+          request_id: hunk.requestId,
+          content_chars: hunk.writeContent.length,
+        })),
+      },
+    },
+    reviewGate: "changes_diff",
+    diffDraft: draft,
+    agentContext,
+    at,
+  };
+}
+
 async function callGateway(
   action: string,
   payload: Record<string, unknown>,
@@ -259,6 +476,8 @@ export async function runAgentLoop(
     agentContext?: Record<string, unknown>;
     onPhaseChange?: (phase: AgentPhase) => void;
     onToolCall?: (result: AgentToolResult) => void;
+    onModelMessage?: (message: { content: string; iteration: number; phase: AgentPhase }) => void;
+    onLoopPrompt?: (message: { content: string; iteration: number; phase: AgentPhase; reason: "tool_result" | "continue" }) => void;
   } = {},
 ): Promise<AgentResult> {
   const {
@@ -269,6 +488,8 @@ export async function runAgentLoop(
     agentContext = {},
     onPhaseChange,
     onToolCall,
+    onModelMessage,
+    onLoopPrompt,
   } = options;
   const currentPlainText = htmlToPlainText(currentText);
 
@@ -284,6 +505,7 @@ export async function runAgentLoop(
     finalSummary: "",
   };
   let modelToolCallCount = 0;
+  let stopReason: AgentStopReason = "no_progress";
 
   // ── Phase 1: Intake — 域检测 + 意图分析 + 风险判定 ──
   setPhase("intake");
@@ -380,15 +602,11 @@ export async function runAgentLoop(
     let responseText: string;
     try {
       responseText = await sendRawChat(settings, systemPrompt, state.messages as ChatMessage[]);
+      onModelMessage?.({ content: responseText, iteration: state.iteration, phase: state.phase });
     } catch (e) {
       state.finalSummary = `模型调用失败: ${e instanceof Error ? e.message : String(e)}`;
-      return {
-        success: false,
-        summary: state.finalSummary,
-        toolCalls: modelToolCallCount,
-        iterations: state.iteration,
-        error: state.finalSummary,
-      };
+      stopReason = "model_error";
+      return buildAgentResult(state, modelToolCallCount, stopReason, state.finalSummary, state.finalSummary);
     }
 
     // 4b. 解析响应中的工具调用标签
@@ -400,31 +618,60 @@ export async function runAgentLoop(
       modelToolCallCount += bridgeRequests.length;
 
       for (const req of bridgeRequests) {
-        const result = await callGateway(
-          req.action,
-          req.payload as Record<string, unknown>,
-          req.purpose,
-          {
-            ...agentContext,
-            loop_iteration: state.iteration,
-            loop_phase: state.phase,
-          },
-        );
+        const requestAgentContext = {
+          ...agentContext,
+          loop_iteration: state.iteration,
+          loop_phase: state.phase,
+          request_id: req.id,
+        };
+        const result = req.action === "write_file"
+          ? buildWriteFileDiffToolResult(
+            req.payload as Record<string, unknown>,
+            req.purpose,
+            requestAgentContext,
+          )
+          : await callGateway(
+            req.action,
+            req.payload as Record<string, unknown>,
+            req.purpose,
+            requestAgentContext,
+          );
         state.toolResults.push(result);
         onToolCall?.(result);
       }
 
+      const currentToolResults = state.toolResults.slice(-bridgeRequests.length);
+      stopReason = agentLoopStopReasonFromToolResults(currentToolResults);
+
+      if (stopReason === "gateway_error") {
+        state.finalSummary = currentToolResults
+          .filter((result) => isErrorToolStatus(result.status))
+          .map((result) => `${result.action}: ${result.resultText}`)
+          .join("\n\n") || "Gateway 工具执行异常。";
+        return buildAgentResult(state, modelToolCallCount, stopReason, state.finalSummary, state.finalSummary);
+      }
+
+      if (stopReason === "approval_required") {
+        state.finalSummary = buildAgentLoopApprovalPauseSummary(currentToolResults);
+        return buildAgentResult(state, modelToolCallCount, stopReason, state.finalSummary);
+      }
+
       // 把工具结果追加到消息中，让模型知道发生了什么
-      const toolResultText = state.toolResults
-        .slice(-bridgeRequests.length)
+      const toolResultText = currentToolResults
         .map((r) => `<tool-result action="${r.action}" status="${r.status}">\n${r.resultText}\n</tool-result>`)
         .join("\n");
+
+      const toolResultPrompt = `${buildOneShotToolFollowupPrompt({
+        userText: userInput,
+        toolResultTexts: [toolResultText],
+      })}\n\n如果任务已完成，请回复 ZHIMENG_TASK_COMPLETE。`;
 
       state.messages.push({ role: "assistant", content: responseText });
       state.messages.push({
         role: "user",
-        content: `工具执行结果:\n${toolResultText}\n\n请根据结果继续处理，如果任务已完成请回复 "ZHIMENG_TASK_COMPLETE"。`,
+        content: toolResultPrompt,
       });
+      onLoopPrompt?.({ content: toolResultPrompt, iteration: state.iteration, phase: state.phase, reason: "tool_result" });
 
       // 继续循环，让模型消化工具结果
       continue;
@@ -441,13 +688,18 @@ export async function runAgentLoop(
       setPhase("writeback");
       state.shouldStop = true;
       state.finalSummary = responseText;
+      stopReason = state.iteration >= maxIterations && !responseText.includes("LUMENOS_TASK_COMPLETE") && !responseText.includes("ZHIMENG_TASK_COMPLETE")
+        ? "max_iterations"
+        : "completed";
     } else {
       // 还没完，把响应追加进去继续
       state.messages.push({ role: "assistant", content: responseText });
+      const continuePrompt = "请继续完成任务。如果已完成请回复 ZHIMENG_TASK_COMPLETE。";
       state.messages.push({
         role: "user",
-        content: "请继续完成任务。如果已完成请回复 ZHIMENG_TASK_COMPLETE。",
+        content: continuePrompt,
       });
+      onLoopPrompt?.({ content: continuePrompt, iteration: state.iteration, phase: state.phase, reason: "continue" });
     }
   }
 
@@ -455,14 +707,12 @@ export async function runAgentLoop(
   if (!state.finalSummary) {
     setPhase("writeback");
     state.finalSummary = state.messages.slice(-5).map((m) => m.content).join("\n");
+    stopReason = state.iteration > maxIterations ? "max_iterations" : stopReason;
+  } else if (stopReason === "no_progress" && state.iteration > maxIterations) {
+    stopReason = "max_iterations";
   }
 
-  return {
-    success: true,
-    summary: state.finalSummary,
-    toolCalls: modelToolCallCount,
-    iterations: state.iteration,
-  };
+  return buildAgentResult(state, modelToolCallCount, stopReason, state.finalSummary);
 
   function setPhase(phase: AgentPhase) {
     state.phase = phase;

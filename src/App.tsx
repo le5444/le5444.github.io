@@ -10,6 +10,7 @@ import { SettingsModal, BookModal } from "./components/Modals";
 import { ToastHost } from "./components/ToastHost";
 import { showToast } from "./utils/toast";
 import { recordWordTotal } from "./store/stats";
+import { importDesktopProviderConfig } from "./utils/provider-config-import";
 
 export default function App() {
   const [settings, setSettings] = useState<ApiSettings>(loadSettings);
@@ -20,11 +21,24 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showBookModal, setShowBookModal] = useState(false);
   const [editingBook, setEditingBook] = useState<BookProject | null>(null);
+  const desktopProviderImportStarted = useRef(false);
 
   const persistSettings = useCallback((next: ApiSettings) => {
     setSettings(next);
     saveSettings(next);
   }, []);
+
+  useEffect(() => {
+    if (desktopProviderImportStarted.current) return;
+    desktopProviderImportStarted.current = true;
+    let cancelled = false;
+    void importDesktopProviderConfig(settings).then((next) => {
+      if (!next || cancelled) return;
+      persistSettings(next);
+      showToast("已从桌面配置工具载入模型配置。", "success", 3500);
+    });
+    return () => { cancelled = true; };
+  }, [persistSettings]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => saveLibrary(library), 350);
