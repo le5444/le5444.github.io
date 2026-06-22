@@ -241,6 +241,17 @@ const persistedStorage = memoryStorage();
 persistAgentThreads([freeThread, projectThread], persistedStorage);
 assertEqual(persistedStorage.raw(AGENT_THREADS_KEY).length, 2, "persist keeps flat compatibility list");
 assertEqual(Object.keys(persistedStorage.raw(AGENT_THREAD_SPACES_KEY).spaces).sort().join(","), "unbound,workspace:book-1", "persist writes spaces index");
+const reloadedPersistedThreads = loadAgentThreads(persistedStorage);
+const reloadedFreeThread = reloadedPersistedThreads.find((thread) => thread.id === "thread-free");
+const reloadedProjectThread = reloadedPersistedThreads.find((thread) => thread.id === "thread-project");
+assert(reloadedFreeThread, "persisted unbound/free conversation reloads");
+assertEqual(reloadedFreeThread.workspaceId, null, "free conversation stays unbound after reload");
+assertEqual(reloadedFreeThread.messages[0].content, "你好", "free conversation user message persists after reload");
+assertEqual(reloadedFreeThread.messages[0].attachments[0].kind, "image", "free conversation image attachment persists after reload");
+assertEqual(reloadedFreeThread.messages[0].attachments[0].dataUrl, "data:image/png;base64,AAAA", "free conversation image data url persists after reload");
+assert(reloadedProjectThread, "persisted project conversation reloads");
+assertEqual(reloadedProjectThread.workspaceId, "book-1", "project conversation keeps workspace binding after reload");
+assertEqual(reloadedProjectThread.messages[0].attachments[0].textPreview, "# 织梦", "project conversation file preview persists after reload");
 
 const mergedContext = mergeAgentThreadContextAttachments(
   [{ id: "old", kind: "file", title: "README", detail: "old", ref: "README.md", source: "thread", status: "attached", at: 100 }],

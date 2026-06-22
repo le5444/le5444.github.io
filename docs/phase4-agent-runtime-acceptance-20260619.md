@@ -27,17 +27,20 @@ Phase 4 的运行层最短闭环是：
 
 | 卡点 | 成功标准 | 验证命令 / 证据 |
 | --- | --- | --- |
-| Agent Loop 多轮 | 只读工具能自动进入 Gateway，并把 `<tool-result>` 回灌给下一轮模型 | `npm run verify:agent-loop-read-tool` |
+| Agent Loop 多轮 | 只读工具能自动进入 Gateway，并把 `<tool-result>` 回灌给下一轮模型；Phase 3 read_file 预览必须继续进入模型请求上下文，不能在 Phase 4 运行层里退化成只展示在右侧 | `npm run verify:agent-loop-read-tool`、`npm run verify:workspace-read-context` |
 | 写入安全 | `write_file` 在 Agent Loop 中先变成 Diff 草案，暂停等待审查 | `npm run verify:agent-loop-write-file`、`npm run verify:agent-loop-read-write` |
 | 命令安全 | `run_command` 进入审批暂停，不直接执行任意 shell | `npm run verify:agent-loop-command` |
 | 审批续跑 | 审批 / Diff 结果能形成续跑状态和续跑提示 | `npm run verify:agent-loop-resume`、`npm run verify:agent-loop-resume-prompt` |
 | Runbook | 当前线程可归纳阶段、阻塞点、下一步，并能作为线程上下文附件 | `npm run verify:phase4`，Agent Home / 状态面板 |
 | Instruction Stack | Codex AGENTS、Claude CLAUDE、Kiro Steering/Specs/Hooks、Runbook 和安全闸门以只读规则层进入上下文 | `npm run verify:phase4` |
-| Memory / Skills | `memory_retrieve` 与 `skill_route` 是 context_pack 的只读来源；`skill_run` 必须显式 Gateway 授权 | `npm run verify:phase4`，`bridge/healthcheck_bridge.py` |
+| Memory / Skills | `memory_retrieve` 与 `skill_route` 是 context_pack 的只读来源，并能进入模型请求上下文；`skill_run` 必须显式 Gateway 授权 | `npm run verify:memory-skills-context`、`npm run verify:phase4`，`bridge/healthcheck_bridge.py` |
 | Worker / Runtime Events | `worker_run`、`worker_status`、`runtime_events` 能作为运行证据进入右侧 / 底部运行面板 | `npm run verify:phase4` |
 | 运行报告 | 线程轨迹可导出为按用户请求、工具、审批、Diff、Worker、结果复核排序的报告 | `npm run verify:agent-run-replay` |
 | Agent Loop 工具证据 | `AgentToolResult[]` 必须能标准化为任务回放 rows，区分工具、审批和 Diff，并展开进入 Tool Trace / 运行报告，不只停留在 summary 文案 | `npm run verify:agent-run-replay`、`npm run verify:phase4-agent-runtime` |
+| context_pack 证据 | Agent Loop 预取的 `context_pack` 必须作为“上下文打包”回放行进入 Tool Trace / 运行报告，带 `phase:context_pack` 标记，不能只藏在 system prompt 里 | `npm run verify:agent-run-replay`、`npm run verify:phase4-agent-runtime` |
 | 直接对话工具证据 | 普通 AI 对话里的 `<bridge-request>` 每轮工具结果也必须标准化为 `replay_rows`，由 Tool Trace / 运行报告消费，避免直接对话变成不可复盘的黑箱 | `npm run verify:agent-run-replay`、`npm run verify:phase4-agent-runtime` |
+| 直接对话请求追踪 | 直接对话里的 read_file、run_command 审批和 write_file Diff 都必须保留 `request_id`，并在回放 detail / meta 中显示 `请求：...` 和 `request:...`，否则运行报告无法追踪模型到底请求了什么 | `npm run verify:agent-run-replay` |
+| 文件 / 项目来源追踪 | `read_file` 回放必须显示 `路径：...` / `path:...`；`workspace_scan` 回放必须显示 `扫描根：...` / `root:...` 和文件数，避免项目任务证据变成无来源日志 | `npm run verify:agent-run-replay` |
 | 线程归属 | Tool Trace 展开 `replay_rows` 前必须按 `agent_context.thread_id` 过滤，当前线程只能看到本线程或未声明归属的运行证据，不能串入其他线程 | `npm run verify:phase4-agent-runtime` |
 | 报告证据范围 | 运行报告必须显式声明当前 Thread ID、Tool Trace 来源和 `agent_context.thread_id` 过滤规则，避免把报告误读成全局运行日志 | `npm run verify:phase4-agent-runtime` |
 | 报告日志范围 | 运行报告里的 Agent Loop 轨迹、直接对话 / 附件传输和最近运行日志段必须按当前 Thread ID 过滤，不能混入其他线程的 runtime log | `npm run verify:phase4-agent-runtime` |
@@ -76,15 +79,18 @@ Phase 4 暂定硬成功标准：
 4. 写文件、命令、Skill runtime、远程模型、MCP、Scheduler 都保留显式执行门。
 5. 运行报告和线程回放能把一次任务的请求、工具、审批、Diff、Worker 和结果证据串起来。
 6. Agent Loop 结束时要保留可回放的工具证据结构，并展开进入当前线程 Tool Trace / 运行报告，而不是重新猜测日志文本。
+6.1. `context_pack` 预取结果要在 Tool Trace / 运行报告里显示为“上下文打包”步骤，并保留 `phase:context_pack` 标记。
 7. 直接对话的工具回灌也要保留同样的可回放证据结构，和 Agent Loop 使用同一套 Tool Trace / 运行报告消费路径。
-8. Tool Trace / 运行报告必须按线程归属过滤，避免一个线程的工具证据污染另一个线程。
-9. 运行报告必须写明证据范围、当前 Thread ID 和线程归属过滤规则，方便任务交接与继续执行。
-10. 报告里的 Agent Loop、直接对话和最近运行日志段也必须按当前 Thread ID 过滤。
-11. 默认报告入口必须当前线程优先；全局报告历史可以保留，但不能在当前线程视图里默认打开或挂入别的线程报告。
-12. 历史报告可以手动打开，但跨线程报告不能被静默挂入当前线程上下文，必须显式阻塞。
-13. 运行报告的工作区归属必须以线程为准；自由对话报告不能因为当前 UI 选中了某个项目而被写成项目报告。
-14. Phase 1 API 对话、Phase 2 Agent Home、Phase 3 项目模式验收继续通过。
-15. `npm run verify:phase4` 是 Phase 4 的总门禁：先确认 Phase 3 没回退，再验证 Agent Runtime 工具链。
+8. 直接对话里的工具、审批和 Diff 都必须保留 request_id；运行报告需要能追到 read_file、run_command 和 write_file 分别来自哪一次模型请求。
+8.1. read_file / workspace_scan 工具证据必须能追到具体文件路径、扫描根和文件数量。
+9. Tool Trace / 运行报告必须按线程归属过滤，避免一个线程的工具证据污染另一个线程。
+10. 运行报告必须写明证据范围、当前 Thread ID 和线程归属过滤规则，方便任务交接与继续执行。
+11. 报告里的 Agent Loop、直接对话和最近运行日志段也必须按当前 Thread ID 过滤。
+12. 默认报告入口必须当前线程优先；全局报告历史可以保留，但不能在当前线程视图里默认打开或挂入别的线程报告。
+13. 历史报告可以手动打开，但跨线程报告不能被静默挂入当前线程上下文，必须显式阻塞。
+14. 运行报告的工作区归属必须以线程为准；自由对话报告不能因为当前 UI 选中了某个项目而被写成项目报告。
+15. Phase 1 API 对话、Phase 2 Agent Home、Phase 3 项目模式验收继续通过；尤其要守住 `read_file` 预览进入模型请求上下文的 `npm run verify:workspace-read-context` 基线。
+16. `npm run verify:phase4` 是 Phase 4 的总门禁：先确认 Phase 3 没回退，再验证 Agent Runtime 工具链。
 
 ## 6. 下一步
 

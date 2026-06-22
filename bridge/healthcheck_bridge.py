@@ -692,7 +692,7 @@ def run_direct_checks() -> List[Dict[str, Any]]:
         assert_true(local_readiness.get("local_endpoint") is True, "Ollama status should be local")
         assert_true(local_readiness.get("key_required") is False, "Ollama status should not require an API key")
 
-        remote_status_result = direct_bridge_request("provider_status", {"preset_id": "openai-gpt-4o-mini"})
+        remote_status_result = direct_bridge_request("provider_status", {"preset_id": "openai-auto-discover"})
         remote_status = remote_status_result.get("provider_status", {})
         remote_readiness = remote_status.get("readiness", {})
         assert_true(remote_status_result.get("status") == "ok", "provider_status remote preset should succeed")
@@ -702,9 +702,9 @@ def run_direct_checks() -> List[Dict[str, Any]]:
 
         dry_probe = direct_bridge_request("provider_probe", {"preset_id": "ollama-qwen"})
         assert_true(dry_probe.get("status") == "approval_required", "provider_probe should require payload.execute=true")
-        blocked_remote = direct_bridge_request("provider_probe", {"preset_id": "openai-gpt-4o-mini", "execute": True})
+        blocked_remote = direct_bridge_request("provider_probe", {"preset_id": "openai-auto-discover", "execute": True})
         assert_true(blocked_remote.get("status") == "approval_required", "provider_probe should require execute_provider before any probe")
-        blocked_remote_with_gate = direct_bridge_request("provider_probe", {"preset_id": "openai-gpt-4o-mini", "execute": True}, execute_provider=True)
+        blocked_remote_with_gate = direct_bridge_request("provider_probe", {"preset_id": "openai-auto-discover", "execute": True}, execute_provider=True)
         assert_true(blocked_remote_with_gate.get("status") == "approval_required", "provider_probe should block remote probes without allow_remote_model")
 
         httpd, api_url = start_healthcheck_provider_server()

@@ -24,6 +24,7 @@ function run(label, command, args) {
 
 const doc = readProjectFile("docs/phase4-agent-runtime-acceptance-20260619.md");
 const component = readProjectFile("src/components/AgentControlCenter.tsx");
+const toolTracePanel = readProjectFile("src/components/WorkbenchToolTracePanel.tsx");
 const agentLoop = readProjectFile("src/os/kernel/agent-loop.ts");
 const agentLoopBridge = readProjectFile("src/os/kernel/agent-loop-bridge.ts");
 const executorBridge = readProjectFile("src/utils/executor-bridge.ts");
@@ -46,6 +47,15 @@ for (const phrase of [
   "解析 <bridge-request>",
   "tool result 回灌模型继续推理",
   "Worker / runtime_events 记录后台任务",
+  "Phase 3 read_file 预览必须继续进入模型请求上下文",
+  "直接对话请求追踪",
+  "request:...",
+  "read_file、run_command 审批和 write_file Diff",
+  "文件 / 项目来源追踪",
+  "路径：...",
+  "扫描根：...",
+  "npm run verify:workspace-read-context",
+  "npm run verify:memory-skills-context",
   "npm run verify:phase4-agent-runtime",
   "npm run verify:phase4",
 ]) {
@@ -60,6 +70,10 @@ for (const script of [
   "verify:agent-run-replay",
   "verify:agent-run-report-scope",
   "verify:agent-thread-store",
+  "verify:workspace-read-context",
+  "verify:runbook-context",
+  "verify:instruction-stack-context",
+  "verify:memory-skills-context",
   "verify:phase3",
   "verify:phase4",
   "verify:phase4-agent-runtime",
@@ -67,8 +81,36 @@ for (const script of [
   assert(packageJson.scripts?.[script], `package script missing: ${script}`);
 }
 
+const phase3ProjectModeRunner = readProjectFile("scripts/verify-phase3-project-mode.mjs");
+const agentRunReplayScript = readProjectFile("scripts/verify-agent-run-replay.mjs");
+const agentLoopReadToolScript = readProjectFile("scripts/verify-agent-loop-read-tool-followup.mjs");
+assert(phase3ProjectModeRunner.includes("verify-workspace-read-context-injection.mjs"), "Phase 3 project runner must include read_file context injection guard");
+for (const snippet of [
+  "direct-req-read-1",
+  "direct-req-command-1",
+  "direct-req-write-1",
+  "direct approval keeps request id meta",
+  "direct diff keeps request id meta",
+  "Agent Loop 上下文打包",
+  "phase:context_pack",
+  "tool replay markdown includes context_pack preparation",
+  "read replay row has path meta",
+  "workspace_scan replay row has root meta",
+  "tool replay markdown includes workspace root marker",
+  "direct read keeps path meta",
+]) {
+  assert(agentRunReplayScript.includes(snippet), `Agent run replay should guard direct chat request ids: ${snippet}`);
+}
+for (const snippet of [
+  "context_pack is the first retained tool result",
+  "tool result evidence keeps context before read tools",
+]) {
+  assert(agentLoopReadToolScript.includes(snippet), `Agent Loop read tool followup should guard context_pack evidence order: ${snippet}`);
+}
+
 for (const snippet of [
   "Agent Loop 预取 context_pack",
+  "state.toolResults.push(gatewayContextPack)",
   "Phase 4+5+6: Act/Verify/Writeback Loop",
   "pendingReviews.length ? \"Agent Loop 已暂停，等待 Diff 审查或审批。\"",
   "buildWriteFileDiffDraftFromPayload",
@@ -76,6 +118,8 @@ for (const snippet of [
   "shouldExecuteReadOnlyBridgeAction(action)",
   "onToolCall",
   "onLoopPrompt",
+  "requestId?: string",
+  "request-id=",
 ]) {
   assert(agentLoop.includes(snippet), `Agent Loop runtime contract missing: ${snippet}`);
 }
@@ -136,6 +180,9 @@ for (const snippet of [
   "runtimeLogMatchesThreadContext",
   "replay_rows",
   "buildAgentDirectChatToolReplayRows",
+  "result: { ...result, request_id: request.id }",
+  'type: "bridge_error"',
+  'toolResults.some((item) => item.status === "error") ? "partial" : "completed"',
   'type: "bridge_round_complete"',
   "buildAgentRunReplayMarkdown",
   "## 证据范围",
@@ -163,17 +210,37 @@ for (const snippet of [
   'data-testid="workbench-side-run-report-open"',
   'data-testid="home-runtime-summary"',
   'data-testid="home-runtime-log-details"',
-  'data-testid="home-toolchain-strip"',
-  "codex-toolchain-step",
+  "<WorkbenchToolTracePanel",
+  "rows={homeToolTraceRows}",
+  "gatewayCount={gatewayToolTraceAllRows.length}",
+  "approvalCount={activeThreadLinkedApprovalRows.length + changeFileRows.length}",
+  "reportCount={currentThreadRunReports.length}",
   'data-testid="home-context-attach-runbook"',
   'data-testid="home-context-attach-skills"',
 ]) {
   assert(component.includes(snippet), `Agent runtime UI/wiring missing: ${snippet}`);
 }
 
+for (const snippet of [
+  "traceNextStepForRow",
+  "traceDetailWithoutNextStep",
+  "data-testid=\"home-tool-trace-next-step\"",
+  "data-next-step-tone={nextStepTone}",
+  "function formatTraceMetaChip",
+  "formatTraceMetaChip(item)",
+  'data-testid="home-toolchain-strip"',
+  'data-testid="home-tool-trace-meta"',
+  "codex-toolchain-step",
+]) {
+  assert(toolTracePanel.includes(snippet), `Agent runtime tool trace panel missing: ${snippet}`);
+}
+
 const checks = [
   ["Agent Loop 工具链", process.execPath, ["scripts/verify-agent-loop-tools.mjs"]],
   ["Agent Loop Bridge 回灌", process.execPath, ["scripts/verify-agent-loop-bridge.mjs"]],
+  ["Runbook 入模上下文", process.execPath, ["scripts/verify-runbook-context-injection.mjs"]],
+  ["指令栈入模上下文", process.execPath, ["scripts/verify-instruction-stack-context-injection.mjs"]],
+  ["Memory / Skills 入模上下文", process.execPath, ["scripts/verify-memory-skills-context-injection.mjs"]],
   ["审批续跑状态", process.execPath, ["scripts/verify-agent-loop-resume-state.mjs"]],
   ["审批续跑提示", process.execPath, ["scripts/verify-agent-loop-resume-prompt.mjs"]],
   ["任务回放报告", process.execPath, ["scripts/verify-agent-run-replay.mjs"]],

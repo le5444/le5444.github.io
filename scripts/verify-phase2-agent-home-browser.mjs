@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -114,8 +114,14 @@ function browserBaseArgs(userDataDir, remoteDebuggingPort = null) {
     "--headless=new",
     "--disable-gpu",
     "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-features=Translate,MediaRouter,OptimizationHints",
+    "--disable-sync",
     "--no-first-run",
     "--no-default-browser-check",
+    "--disable-breakpad",
     `--user-data-dir=${userDataDir}`,
   ];
   if (remoteDebuggingPort) baseArgs.push(`--remote-debugging-port=${remoteDebuggingPort}`);
@@ -249,7 +255,7 @@ async function connectWebSocket(wsUrl) {
         const timeout = setTimeout(() => {
           pending.delete(id);
           rejectMessage(new Error(`DevTools command timed out: ${method}`));
-        }, 20000);
+        }, 60000);
         pending.set(id, (message) => {
           clearTimeout(timeout);
           if (message.error) rejectMessage(new Error(`${method}: ${JSON.stringify(message.error)}`));
@@ -284,18 +290,53 @@ async function stopBrowserProcess(browserProcess) {
     browserProcess.once("exit", resolveExit);
   });
   browserProcess.kill();
-  await Promise.race([exited, delay(1500)]);
+  const firstExit = await Promise.race([exited.then(() => true), delay(3000).then(() => false)]);
+  if (!firstExit && browserProcess.exitCode === null && browserProcess.signalCode === null) {
+    if (process.platform === "win32" && browserProcess.pid) {
+      spawnSync("taskkill", ["/pid", String(browserProcess.pid), "/T", "/F"], { stdio: "ignore" });
+    }
+    browserProcess.kill("SIGKILL");
+    await Promise.race([exited, delay(3000)]);
+  }
+}
+
+async function closeBrowserByDevtools(devtools) {
+  if (!devtools) return;
+  try {
+    await devtools.send("Browser.close");
+    await delay(500);
+  } catch {
+    // The page websocket may close before acknowledging Browser.close.
+  }
+}
+
+async function cleanupBrowserDataDir(path) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 });
+      return;
+    } catch (error) {
+      if (attempt === 7) {
+        console.warn(`[phase2-browser] browser temp cleanup skipped: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      await delay(400);
+    }
+  }
 }
 
 const port = Number(process.env.ZHIMENG_PHASE2_BROWSER_PORT || await findOpenPort());
 const debugPort = Number(process.env.ZHIMENG_PHASE2_BROWSER_DEBUG_PORT || await findOpenPort(5500));
+const mockProviderPort = Number(process.env.ZHIMENG_PHASE2_BROWSER_PROVIDER_PORT || await findOpenPort(5600));
 const url = `http://127.0.0.1:${port}/?phase2-browser-smoke=1`;
 const runtimeDir = resolve(".codex-runtime");
 mkdirSync(runtimeDir, { recursive: true });
-const screenshotPath = join(runtimeDir, "phase2-agent-home-browser.png");
+const collapsedScreenshotPath = join(runtimeDir, "phase2-agent-home-browser-collapsed.png");
+const screenshotPath = join(runtimeDir, "phase2-agent-home-browser-status-open.png");
 const browserDataDir = mkdtempSync(join(tmpdir(), "zhimeng-agent-home-browser-"));
 const server = createStaticDistServer(resolve("dist"));
 let browserProcess = null;
+let mockProviderProcess = null;
 let devtools = null;
 
 try {
@@ -304,6 +345,16 @@ try {
     server.listen(port, "127.0.0.1", resolveListen);
   });
   await waitForServer(`http://127.0.0.1:${port}/`);
+  mockProviderProcess = spawn(process.execPath, [
+    "scripts/smoke-openai-compatible-server.mjs",
+    String(mockProviderPort),
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  let mockProviderStderr = "";
+  mockProviderProcess.stderr?.on("data", (chunk) => { mockProviderStderr += String(chunk); });
+  mockProviderProcess.stdout?.resume();
+  await waitForServer(`http://127.0.0.1:${mockProviderPort}/v1/models`, 15000).catch((error) => {
+    throw new Error(`mock Provider did not become ready: ${error instanceof Error ? error.message : String(error)} ${mockProviderStderr}`);
+  });
   const browserPath = findBrowser();
   browserProcess = spawn(browserPath, [
     ...browserBaseArgs(browserDataDir, debugPort),
@@ -342,6 +393,9 @@ try {
           const composer = document.querySelector('[data-testid="agent-thread-composer"]');
           const side = document.querySelector('[data-testid="agent-home-side-tabs"]');
           if (home && left && main && composer && side) {
+            const modelPill = document.querySelector('[data-testid="composer-model-pill"]');
+            const emptyModelLink = document.querySelector('[data-testid="agent-home-empty-model-link"]');
+            const starterModelButton = document.querySelector('[data-testid="agent-home-starter-config-model"]');
             const rectOf = (element) => {
               const rect = element.getBoundingClientRect();
               return {
@@ -356,6 +410,12 @@ try {
               title: document.title,
               sideState: side.getAttribute('data-panel-state'),
               html: document.documentElement.outerHTML,
+              modelPillText: modelPill?.innerText.replace(/\\s+/g, " ").trim() || "",
+              modelPillTitle: modelPill?.getAttribute("title") || "",
+              emptyModelLinkText: emptyModelLink?.innerText.replace(/\\s+/g, " ").trim() || "",
+              emptyModelLinkTitle: emptyModelLink?.getAttribute("title") || "",
+              starterModelButtonText: starterModelButton?.innerText.replace(/\\s+/g, " ").trim() || "",
+              starterModelButtonTitle: starterModelButton?.getAttribute("title") || "",
               layout: {
                 viewport: { width: window.innerWidth, height: window.innerHeight },
                 home: rectOf(home),
@@ -386,6 +446,12 @@ try {
   assert(layout.main?.width > (layout.left?.width || 0) * 2, `main chat area must remain the primary surface: ${JSON.stringify(layout)}`);
   assert(layout.composer?.width >= 720, `composer is too narrow for a chat-first home: ${JSON.stringify(layout.composer)}`);
   assert(layout.composer?.x > layout.left?.width, `composer should be in the main panel, not the left rail: ${JSON.stringify(layout)}`);
+  const initialModelText = `${readyValue.modelPillText || ""}\n${readyValue.emptyModelLinkText || ""}`;
+  const initialModelTitle = `${readyValue.modelPillTitle || ""}\n${readyValue.emptyModelLinkTitle || ""}`;
+  if (initialModelText.includes("LM Studio Local") || initialModelText.includes("local-model")) {
+    assert(initialModelText.includes("配置档案"), `offline local model label should clarify saved profile, not live model availability: ${JSON.stringify({ initialModelText, initialModelTitle })}`);
+    assert(initialModelTitle.includes("不代表本地模型服务已启动"), `offline local model title should explain service is not started: ${JSON.stringify({ initialModelText, initialModelTitle })}`);
+  }
   const dom = String(readyValue.html || "");
   for (const phrase of [
     "织梦写作台 / Zhimeng Writing Agent",
@@ -394,11 +460,769 @@ try {
     "agent-home-side-tabs",
     "data-panel-state=\"collapsed\"",
     "composer-model-pill",
+    "agent-home-starter-config-model",
   ]) {
     assert(dom.includes(phrase), `browser DOM missing: ${phrase}`);
   }
+  assert(String(readyValue.starterModelButtonText || "").includes("配置模型"), `empty Agent Home should expose the primary model setup action: ${JSON.stringify({
+    starterModelButtonText: readyValue.starterModelButtonText,
+    starterModelButtonTitle: readyValue.starterModelButtonTitle,
+  })}`);
+  for (const phrase of [
+    "workbench-sidebar-project-section",
+    "agent-home-new-project-thread",
+    "agent-home-workspace-create",
+    "composer-project-strip",
+    "composer-open-files",
+    "composer-scan-workspace",
+    "composer-bind-workspace-root",
+    "home-workspace-root-input",
+    "home-workspace-root-save",
+    "home-workspace-root-scan",
+    "home-index-preview-file",
+    "home-index-attach-file",
+    "home-index-preview-diff",
+    "home-index-attach-index",
+    "项目文件工作流",
+    "当前步骤",
+    "读取 read_file 预览",
+    "挂入上下文",
+    "生成待审 Diff 草案",
+  ]) {
+    assert(dom.includes(phrase), `browser DOM missing project-mode workflow affordance: ${phrase}`);
+  }
   assert(!dom.includes("agent-home-side-tab-model"), "Agent Home right rail must not expose a model/API tab");
   assert(!dom.includes("agent-model-drawer"), "Agent Home must not render the legacy model drawer");
+  const collapsedScreenshotResult = await devtools.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: true,
+  });
+  writeFileSync(collapsedScreenshotPath, Buffer.from(collapsedScreenshotResult.data, "base64"));
+  assert(existsSync(collapsedScreenshotPath), `collapsed screenshot not created: ${collapsedScreenshotPath}`);
+  assert(statSync(collapsedScreenshotPath).size > 10000, `collapsed screenshot too small: ${collapsedScreenshotPath}`);
+  const customProviderSettingsResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const openButton = document.querySelector('[data-testid="agent-home-starter-config-model"]') || document.querySelector('[data-testid="composer-model-pill"]');
+        if (!openButton) {
+          resolve({ ok: false, reason: "missing model setup opener", html: document.documentElement.outerHTML });
+          return;
+        }
+        openButton.click();
+        const startedAt = Date.now();
+        const setNativeValue = (element, value) => {
+          const proto = Object.getPrototypeOf(element);
+          const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+          descriptor?.set?.call(element, value);
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        const tick = () => {
+          const panel = document.querySelector('[data-testid="settings-modal-panel"]');
+          const quickstart = document.querySelector('[data-testid="settings-provider-custom-quickstart"]');
+          const apiUrl = document.querySelector('[data-testid="settings-custom-api-url-input"]');
+          const apiKey = document.querySelector('[data-testid="settings-custom-api-key-input"]');
+          const modelId = document.querySelector('[data-testid="settings-custom-model-id-input"]');
+          const modelName = document.querySelector('[data-testid="settings-custom-model-name-input"]');
+          const provider = document.querySelector('[data-testid="settings-custom-provider-select"]');
+          const save = document.querySelector('[data-testid="settings-quick-save-button"]');
+          const pasteParser = document.querySelector('[data-testid="settings-provider-paste-parser"]');
+          const pasteInput = document.querySelector('[data-testid="settings-provider-config-paste-input"]');
+          const pasteButton = document.querySelector('[data-testid="settings-parse-provider-config-button"]');
+          const presets = document.querySelector('[data-testid="settings-provider-presets"]');
+          const discover = Array.from(document.querySelectorAll("button")).find((button) => (button.innerText || "").includes("获取账号模型"));
+          const keyInputs = Array.from(document.querySelectorAll('input[type="password"]'));
+          const manualFormText = document.querySelector('[data-testid="settings-provider-manual-form"]')?.innerText || "";
+          const currentProviderStatus = document.querySelector('[data-testid="settings-current-provider-status"]')?.innerText.replace(/\s+/g, " ").trim() || "";
+          const discoveryPanel = document.querySelector('[data-testid="settings-model-discovery"]');
+          if (panel && quickstart && apiUrl && apiKey && modelId && modelName && provider && save && discover && pasteParser && pasteInput && pasteButton) {
+            const panelRect = panel.getBoundingClientRect();
+            const panelStyle = getComputedStyle(panel);
+            const panelStyleSnapshot = {
+              backgroundColor: panelStyle.getPropertyValue("background-color"),
+              borderRadius: panelStyle.getPropertyValue("border-radius"),
+              color: panelStyle.getPropertyValue("color"),
+            };
+            const presetsDefaultClosed = presets instanceof HTMLDetailsElement ? !presets.open : false;
+            const presetsSummaryText = presets?.querySelector("summary")?.innerText.replace(/\\s+/g, " ").trim() || "";
+            setNativeValue(pasteInput, JSON.stringify({
+              baseURL: "  http://127.0.0.1:${mockProviderPort}/v1/  ",
+              apiKey: "  sk-browser-smoke-key  ",
+              provider: "openai-compatible",
+              model: "paste-parser-preflight-model",
+              name: "Paste Parser Preflight",
+            }));
+            window.__zhimengPasteParserMessage = "";
+            window.__zhimengPasteParserDraft = {};
+            setTimeout(() => {
+              pasteButton.click();
+              setTimeout(() => {
+                window.__zhimengPasteParserMessage = document.querySelector('[data-testid="settings-provider-config-paste-message"]')?.innerText.replace(/\\s+/g, " ").trim() || "";
+                window.__zhimengPasteParserDraft = {
+                  apiUrl: apiUrl.value,
+                  apiKey: apiKey.value,
+                  modelId: modelId.value,
+                  modelName: modelName.value,
+                  provider: provider.value,
+                };
+                discover.click();
+              }, 180);
+            }, 100);
+            const waitDiscovered = () => {
+              const text = document.body.innerText;
+              const draftButton = Array.from(document.querySelectorAll("button")).find((button) => (button.innerText || "").includes("填入草稿"));
+              if (text.includes("smoke-model") && draftButton) {
+                draftButton.click();
+                setTimeout(() => {
+                  window.__zhimengDiscoveredDraftStatus = document.body.innerText.includes("草稿已选，保存 API 配置后首页生效");
+                  setNativeValue(modelName, "Browser Smoke Model");
+                  save.click();
+                }, 80);
+                return;
+              }
+              if (Date.now() - startedAt > 12000) {
+                setNativeValue(modelId, "smoke-model");
+                setNativeValue(modelName, "Browser Smoke Model");
+                save.click();
+                return;
+              }
+              setTimeout(waitDiscovered, 120);
+            };
+            waitDiscovered();
+            const waitSaved = () => {
+              const storage = JSON.parse(localStorage.getItem("novelsmith-api-settings") || "{}");
+              const modelPill = document.querySelector('[data-testid="composer-model-pill"]');
+              const status = document.querySelector('[data-testid="composer-send-mode-status"]');
+              const modelPillText = (modelPill?.textContent || modelPill?.innerText || "").replace(/\s+/g, " ").trim();
+              const compactModelPillText = modelPillText.replace(/\s+/g, "");
+              const bodyText = document.body.innerText;
+              const modelPillReady = compactModelPillText.includes("BrowserSmokeModel")
+                || modelPillText.includes("smoke-model")
+                || (bodyText.includes("Browser Smoke Model") && !modelPillText.includes("正在检测模型") && !modelPillText.includes("需要配置模型"));
+              if (!document.querySelector('[data-testid="settings-modal-panel"]') && storage.modelId === "smoke-model" && modelPillReady) {
+                resolve({
+                  ok: true,
+                  storage: {
+                    apiUrl: storage.apiUrl,
+                    apiKey: storage.apiKey,
+                    modelId: storage.modelId,
+                    modelName: storage.modelName,
+                    provider: storage.provider,
+                  },
+                  modelPillText,
+                  statusText: status?.innerText.replace(/\\s+/g, " ").trim() || "",
+                  bodyText,
+                  keyInputCount: keyInputs.length,
+                  manualFormText,
+                  currentProviderStatus,
+                  discoveredDraftStatus: Boolean(window.__zhimengDiscoveredDraftStatus),
+                  hasDiscoveryPanel: Boolean(discoveryPanel),
+                  hasPasteParser: Boolean(pasteParser),
+                  pasteParserMessage: window.__zhimengPasteParserMessage || "",
+                  pasteParserDraft: window.__zhimengPasteParserDraft || {},
+                  usedQuickSave: save?.getAttribute("data-testid") === "settings-quick-save-button",
+                  presetsDefaultClosed,
+                  presetsSummaryText,
+                  panelRect: {
+                    width: Math.round(panelRect.width),
+                    height: Math.round(panelRect.height),
+                    top: Math.round(panelRect.top),
+                  },
+                  panelStyle: panelStyleSnapshot,
+                });
+                return;
+              }
+              if (Date.now() - startedAt > 12000) {
+                resolve({
+                  ok: false,
+                  reason: "settings did not save or model pill did not refresh",
+                  storage,
+                  modalStillOpen: Boolean(document.querySelector('[data-testid="settings-modal-panel"]')),
+                  modelPillText,
+                  text: bodyText,
+                  html: document.documentElement.outerHTML,
+                });
+                return;
+              }
+              setTimeout(waitSaved, 100);
+            };
+            waitSaved();
+            return;
+          }
+          if (Date.now() - startedAt > 8000) {
+            resolve({
+              ok: false,
+              reason: "custom provider settings form did not appear",
+              text: document.body.innerText,
+              html: document.documentElement.outerHTML,
+            });
+            return;
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      })
+    `,
+  });
+  const customProviderSettings = customProviderSettingsResult.result?.value || {};
+  assert(customProviderSettings.ok, `Custom Provider settings could not be filled and saved: ${JSON.stringify(customProviderSettings).slice(0, 2000)}`);
+  assert(customProviderSettings.storage?.apiUrl === `http://127.0.0.1:${mockProviderPort}/v1`, `custom Provider API URL did not persist trimmed URL: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.storage?.apiKey === "sk-browser-smoke-key", `custom Provider API key did not persist in local settings: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.storage?.modelId === "smoke-model", `custom Provider model ID did not persist: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.storage?.provider === "openai-compatible", `custom Provider type did not persist: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.keyInputCount === 1, `settings modal should expose one API key entry, not duplicate manual forms: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.usedQuickSave === true, `settings modal should save from the custom API quickstart area: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.panelRect?.width <= 760, `settings modal should stay a lightweight desktop panel, not a fullscreen surface: ${JSON.stringify(customProviderSettings.panelRect)}`);
+  assert(customProviderSettings.panelRect?.top >= 40, `settings modal should open as a floating panel with page context visible: ${JSON.stringify(customProviderSettings.panelRect)}`);
+  assert(String(customProviderSettings.panelStyle?.backgroundColor).includes("255, 255, 255"), `settings modal should render as a light Codex-style panel: ${JSON.stringify(customProviderSettings.panelStyle)}`);
+  assert(Number.parseFloat(String(customProviderSettings.panelStyle?.borderRadius || "0")) <= 14, `settings modal radius should stay restrained: ${JSON.stringify(customProviderSettings.panelStyle)}`);
+  assert(String(customProviderSettings.manualFormText).includes("要修改接口、key 或模型 ID，请使用最上方"), `manual settings section should point back to the single custom API entry: ${JSON.stringify(customProviderSettings)}`);
+  assert(String(customProviderSettings.currentProviderStatus).includes("当前首页正在使用"), `settings modal should show active Provider status: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.hasPasteParser === true, `settings modal should expose paste-to-config parser: ${JSON.stringify(customProviderSettings)}`);
+  assert(String(customProviderSettings.pasteParserMessage || "").includes("已解析并填入草稿"), `paste parser should confirm draft-only parsing: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.pasteParserDraft?.apiUrl === `http://127.0.0.1:${mockProviderPort}/v1`, `paste parser should fill trimmed API URL into the draft: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.pasteParserDraft?.apiKey === "sk-browser-smoke-key", `paste parser should fill trimmed API key into the draft: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.pasteParserDraft?.modelId === "paste-parser-preflight-model", `paste parser should fill model ID into the draft before /models selection: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.pasteParserDraft?.provider === "openai-compatible", `paste parser should fill provider into the draft: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.discoveredDraftStatus === true, `settings modal should support selecting a discovered model as a draft before saving: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.hasDiscoveryPanel === true, `settings modal should keep model discovery next to custom API config: ${JSON.stringify(customProviderSettings)}`);
+  assert(customProviderSettings.presetsDefaultClosed === true, `provider endpoint templates should stay secondary/collapsed by default: ${JSON.stringify(customProviderSettings)}`);
+  assert(String(customProviderSettings.presetsSummaryText).includes("不是模型清单"), `provider endpoint templates should not read like stale model choices: ${JSON.stringify(customProviderSettings)}`);
+  assert(
+    String(customProviderSettings.modelPillText).replace(/\s+/g, "").includes("BrowserSmokeModel")
+      || String(customProviderSettings.modelPillText).includes("smoke-model")
+      || String(customProviderSettings.bodyText).includes("Browser Smoke Model"),
+    `composer model pill did not reflect saved custom Provider: ${JSON.stringify(customProviderSettings)}`,
+  );
+  const directChatResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const composer = document.querySelector('[data-testid="agent-thread-composer"]');
+        const send = document.querySelector('[data-testid="agent-send-button"]');
+        if (!composer || !send) {
+          resolve({ ok: false, reason: "missing composer or send button", html: document.documentElement.outerHTML });
+          return;
+        }
+        const proto = Object.getPrototypeOf(composer);
+        const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+        descriptor?.set?.call(composer, "请回复浏览器模型配置冒烟。");
+        composer.dispatchEvent(new Event("input", { bubbles: true }));
+        composer.dispatchEvent(new Event("change", { bubbles: true }));
+        setTimeout(() => {
+          document.querySelector('[data-testid="agent-send-button"]')?.click();
+          const startedAt = Date.now();
+          const tick = () => {
+            const text = document.body.innerText;
+            const modelPill = document.querySelector('[data-testid="composer-model-pill"]');
+            if (text.includes("浏览器模型配置冒烟成功。")) {
+              resolve({
+                ok: true,
+                bodyText: text,
+                modelPillText: (modelPill?.textContent || modelPill?.innerText || "").replace(/\\s+/g, " ").trim(),
+              });
+              return;
+            }
+            if (Date.now() - startedAt > 20000) {
+              resolve({
+                ok: false,
+                reason: "AI reply did not appear",
+                bodyText: text,
+                html: document.documentElement.outerHTML,
+              });
+              return;
+            }
+            setTimeout(tick, 150);
+          };
+          tick();
+        }, 100);
+      })
+    `,
+  });
+  const directChat = directChatResult.result?.value || {};
+  assert(directChat.ok, `Custom Provider saved in browser but direct chat did not return a reply: ${JSON.stringify(directChat).slice(0, 2000)}`);
+  assert(String(directChat.modelPillText).replace(/\s+/g, "").includes("BrowserSmokeModel") || String(directChat.modelPillText).includes("smoke-model"), `direct chat model pill drifted: ${JSON.stringify(directChat)}`);
+  const lastChat = await waitForJson(`http://127.0.0.1:${mockProviderPort}/__last-chat`);
+  assert(lastChat.model === "smoke-model", `mock Provider did not receive saved model id: ${JSON.stringify(lastChat)}`);
+  assert(lastChat.authorization === "[present]", `mock Provider did not receive Authorization header: ${JSON.stringify(lastChat)}`);
+  assert(String(lastChat.text || "").includes("请回复浏览器模型配置冒烟。"), `mock Provider did not receive browser composer text: ${JSON.stringify(lastChat).slice(0, 2000)}`);
+  await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      (() => {
+        const settings = JSON.parse(localStorage.getItem("novelsmith-api-settings") || "{}");
+        settings.modelId = "auth-fail-model";
+        settings.modelName = "Auth Failure Smoke Model";
+        settings.provider = "openai-compatible";
+        localStorage.setItem("novelsmith-api-settings", JSON.stringify(settings));
+        location.reload();
+        return true;
+      })()
+    `,
+  });
+  const authFailLoadedResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const startedAt = Date.now();
+        const tick = () => {
+          const settings = JSON.parse(localStorage.getItem("novelsmith-api-settings") || "{}");
+          const modelPill = document.querySelector('[data-testid="composer-model-pill"]');
+          const title = modelPill?.getAttribute("title") || "";
+          const text = modelPill?.innerText || "";
+          const home = document.querySelector('[data-testid="agent-home-focused"]');
+          if (home && settings.modelId === "auth-fail-model" && (title.includes("Auth Failure Smoke Model") || title.includes("auth-fail-model") || text.includes("Auth Failure Smoke Model") || text.includes("auth-fail-model"))) {
+            resolve({ ok: true, title, text, settings });
+            return;
+          }
+          if (Date.now() - startedAt > 10000) {
+            resolve({ ok: false, title, text, settings, bodyText: document.body.innerText });
+            return;
+          }
+          setTimeout(tick, 120);
+        };
+        tick();
+      })
+    `,
+  });
+  const authFailLoaded = authFailLoadedResult.result?.value || {};
+  assert(authFailLoaded.ok, `auth-fail Provider config did not load before failure smoke: ${JSON.stringify(authFailLoaded).slice(0, 2000)}`);
+  const failureRecoveryResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const startedAt = Date.now();
+        const setNativeValue = (element, value) => {
+          const proto = Object.getPrototypeOf(element);
+          const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+          descriptor?.set?.call(element, value);
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        const sendFailureMessage = () => {
+          const composer = document.querySelector('[data-testid="agent-thread-composer"]');
+          const send = document.querySelector('[data-testid="agent-send-button"]');
+          if (!composer || !send) return false;
+          setNativeValue(composer, "请触发浏览器失败恢复按钮。");
+          setTimeout(() => document.querySelector('[data-testid="agent-send-button"]')?.click(), 80);
+          return true;
+        };
+        let sent = false;
+        const tick = () => {
+          const home = document.querySelector('[data-testid="agent-home-focused"]');
+          if (home && !sent) sent = sendFailureMessage();
+          const bodyText = document.body.innerText;
+          const openModel = document.querySelector('[data-testid="message-open-model-settings"]');
+          const retry = document.querySelector('[data-testid="message-retry-last"]');
+          const composerRetry = document.querySelector('[data-testid="composer-blocker-retry-last"]');
+          const composerSettings = document.querySelector('[data-testid="composer-open-model"]');
+          if ((bodyText.includes("AI 请求失败") || bodyText.includes("请求失败：")) && openModel && retry && composerRetry && composerSettings) {
+            resolve({
+              ok: true,
+              bodyText,
+              openModelText: openModel.innerText.replace(/\\s+/g, " ").trim(),
+              retryText: retry.innerText.replace(/\\s+/g, " ").trim(),
+              composerActionsText: document.querySelector('[data-testid="composer-send-mode-status"]')?.innerText.replace(/\\s+/g, " ").trim() || "",
+            });
+            return;
+          }
+          if (Date.now() - startedAt > 22000) {
+            resolve({
+              ok: false,
+              sent,
+              bodyText,
+              hasOpenModel: Boolean(openModel),
+              hasRetry: Boolean(retry),
+              hasComposerRetry: Boolean(composerRetry),
+              hasComposerSettings: Boolean(composerSettings),
+              html: document.documentElement.outerHTML,
+            });
+            return;
+          }
+          setTimeout(tick, 150);
+        };
+        tick();
+      })
+    `,
+  });
+  const failureRecovery = failureRecoveryResult.result?.value || {};
+  assert(failureRecovery.ok, `browser chat failure did not expose model settings and retry actions: ${JSON.stringify(failureRecovery).slice(0, 2000)}`);
+  assert(String(failureRecovery.openModelText || "").includes("模型设置"), `failure message model settings action should be labeled: ${JSON.stringify(failureRecovery)}`);
+  assert(String(failureRecovery.retryText || "").includes("重试"), `failure message retry action should be labeled: ${JSON.stringify(failureRecovery)}`);
+  assert(String(failureRecovery.bodyText || "").includes("密钥没有通过认证"), `401 failure should explain the API key/auth problem in user-facing Chinese: ${JSON.stringify(failureRecovery).slice(0, 2000)}`);
+  assert(String(failureRecovery.bodyText || "").includes("下一步") && String(failureRecovery.bodyText || "").includes("保存后点“重试”"), `failure message should give a clear next step: ${JSON.stringify(failureRecovery).slice(0, 2000)}`);
+  assert(String(failureRecovery.composerActionsText || "").includes("设置") && String(failureRecovery.composerActionsText || "").includes("重试"), `composer blocker should expose text recovery actions: ${JSON.stringify(failureRecovery)}`);
+  await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      (() => {
+        const settings = JSON.parse(localStorage.getItem("novelsmith-api-settings") || "{}");
+        settings.modelId = "smoke-model";
+        settings.modelName = "Browser Smoke Model";
+        settings.provider = "openai-compatible";
+        localStorage.setItem("novelsmith-api-settings", JSON.stringify(settings));
+        location.reload();
+        return true;
+      })()
+    `,
+  });
+  await delay(900);
+  const attachmentReceiptResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const input = document.querySelector('[data-testid="agent-home-composer-attachment-input"]');
+        if (!input) {
+          resolve({ ok: false, reason: "missing attachment input", html: document.documentElement.outerHTML });
+          return;
+        }
+        try {
+          const file = new File(["Phase2 browser attachment receipt preview: 文件片段进入模型请求。"], "phase2-receipt.txt", { type: "text/plain" });
+          const transfer = new DataTransfer();
+          transfer.items.add(file);
+          Object.defineProperty(input, "files", { value: transfer.files, configurable: true });
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (error) {
+          resolve({ ok: false, reason: String(error && error.message || error), html: document.documentElement.outerHTML });
+          return;
+        }
+        const startedAt = Date.now();
+        const tick = () => {
+          const receipt = document.querySelector('[data-testid="agent-home-composer-attachment-receipt"]');
+          const card = document.querySelector('[data-testid="agent-home-composer-attachment-card"]');
+          if (receipt && card) {
+            resolve({
+              ok: true,
+              receiptText: receipt.innerText.replace(/\\s+/g, " ").trim(),
+              cardText: card.innerText.replace(/\\s+/g, " ").trim(),
+              hasModelPayload: receipt.getAttribute("data-has-model-payload"),
+              imageCount: receipt.getAttribute("data-image-count"),
+              parsedFileCount: receipt.getAttribute("data-parsed-file-count"),
+              metadataFileCount: receipt.getAttribute("data-metadata-file-count"),
+              failedFileCount: receipt.getAttribute("data-failed-file-count"),
+              status: receipt.getAttribute("data-status"),
+              rejectedFromModel: receipt.getAttribute("data-rejected-from-model"),
+              cardKind: card.getAttribute("data-attachment-kind"),
+              cardParseStatus: card.getAttribute("data-parse-status"),
+            });
+            return;
+          }
+          if (Date.now() - startedAt > 8000) {
+            resolve({ ok: false, reason: "attachment receipt did not appear", text: document.body.innerText, html: document.documentElement.outerHTML });
+            return;
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      })
+    `,
+  });
+  const attachmentReceipt = attachmentReceiptResult.result?.value || {};
+  assert(attachmentReceipt.ok, `Agent Home attachment receipt did not render after upload: ${JSON.stringify(attachmentReceipt).slice(0, 2000)}`);
+  assert(attachmentReceipt.hasModelPayload === "true", `attachment receipt should expose model payload: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.imageCount === "0", `text attachment should expose zero image count: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.parsedFileCount === "1", `text attachment should expose parsed file count: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.metadataFileCount === "0", `text attachment should expose zero metadata file count: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.failedFileCount === "0", `text attachment should expose zero failed file count: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.status === "进入模型请求", `attachment receipt should state model request delivery: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.rejectedFromModel === "false", `accepted text attachment should not be marked rejected: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.cardKind === "file", `attachment card should expose file kind: ${JSON.stringify(attachmentReceipt)}`);
+  assert(attachmentReceipt.cardParseStatus === "parsed", `attachment card should expose parsed status: ${JSON.stringify(attachmentReceipt)}`);
+  assert(String(attachmentReceipt.receiptText).includes("附件回执"), "attachment receipt text should include label");
+  assert(String(attachmentReceipt.cardText).includes("文本片段"), "attachment card text should include parsed text delivery");
+  const imageAttachmentReceiptResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const input = document.querySelector('[data-testid="agent-home-composer-attachment-input"]');
+        if (!input) {
+          resolve({ ok: false, reason: "missing attachment input", html: document.documentElement.outerHTML });
+          return;
+        }
+        try {
+          const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
+          const file = new File([imageBytes], "phase2-image.png", { type: "image/png" });
+          const transfer = new DataTransfer();
+          transfer.items.add(file);
+          Object.defineProperty(input, "files", { value: transfer.files, configurable: true });
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (error) {
+          resolve({ ok: false, reason: String(error && error.message || error), html: document.documentElement.outerHTML });
+          return;
+        }
+        const startedAt = Date.now();
+        const tick = () => {
+          const receipt = document.querySelector('[data-testid="agent-home-composer-attachment-receipt"]');
+          const cards = Array.from(document.querySelectorAll('[data-testid="agent-home-composer-attachment-card"]'));
+          const imageCard = cards.find((card) => card.getAttribute("data-attachment-kind") === "image");
+          if (receipt && imageCard && receipt.getAttribute("data-image-count") === "1") {
+            resolve({
+              ok: true,
+              receiptText: receipt.innerText.replace(/\\s+/g, " ").trim(),
+              imageCardText: imageCard.innerText.replace(/\\s+/g, " ").trim(),
+              hasModelPayload: receipt.getAttribute("data-has-model-payload"),
+              imageCount: receipt.getAttribute("data-image-count"),
+              parsedFileCount: receipt.getAttribute("data-parsed-file-count"),
+              metadataFileCount: receipt.getAttribute("data-metadata-file-count"),
+              failedFileCount: receipt.getAttribute("data-failed-file-count"),
+              status: receipt.getAttribute("data-status"),
+              rejectedFromModel: receipt.getAttribute("data-rejected-from-model"),
+              cardCount: String(cards.length),
+              imageCardParseStatus: imageCard.getAttribute("data-parse-status"),
+            });
+            return;
+          }
+          if (Date.now() - startedAt > 8000) {
+            resolve({
+              ok: false,
+              reason: "image attachment receipt did not appear",
+              receiptText: receipt?.innerText || "",
+              imageCount: receipt?.getAttribute("data-image-count") || "",
+              cardCount: String(cards.length),
+              text: document.body.innerText,
+              html: document.documentElement.outerHTML,
+            });
+            return;
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      })
+    `,
+  });
+  const imageAttachmentReceipt = imageAttachmentReceiptResult.result?.value || {};
+  assert(imageAttachmentReceipt.ok, `Agent Home image attachment receipt did not render after upload: ${JSON.stringify(imageAttachmentReceipt).slice(0, 2000)}`);
+  assert(imageAttachmentReceipt.hasModelPayload === "true", `image attachment receipt should expose model payload: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.imageCount === "1", `image attachment receipt should expose image count: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.parsedFileCount === "1", `image upload should preserve previous parsed text file count: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.metadataFileCount === "0", `image upload should expose zero metadata file count: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.failedFileCount === "0", `image upload should expose zero failed file count: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.status === "进入模型请求", `image attachment receipt should state model request delivery: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.rejectedFromModel === "false", `accepted image attachment should not be marked rejected: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.cardCount === "2", `text + image upload should render two attachment cards: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.imageCardParseStatus === "parsed", `image attachment card should expose parsed status: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(String(imageAttachmentReceipt.receiptText).includes("1 张图片"), "image attachment receipt should mention one image");
+  assert(String(imageAttachmentReceipt.imageCardText).includes("多模态图片"), "image attachment card should include multimodal delivery");
+  const attachmentSendResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const composer = document.querySelector('[data-testid="agent-thread-composer"]');
+        const send = document.querySelector('[data-testid="agent-send-button"]');
+        if (!composer || !send) {
+          resolve({ ok: false, reason: "missing composer or send button", html: document.documentElement.outerHTML });
+          return;
+        }
+        const proto = Object.getPrototypeOf(composer);
+        const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+        descriptor?.set?.call(composer, "请确认你收到了这次首页上传的文件和图片。");
+        composer.dispatchEvent(new Event("input", { bubbles: true }));
+        composer.dispatchEvent(new Event("change", { bubbles: true }));
+        setTimeout(() => {
+          document.querySelector('[data-testid="agent-send-button"]')?.click();
+          const startedAt = Date.now();
+          const tick = () => {
+            const text = document.body.innerText;
+            if (text.includes("浏览器模型配置冒烟成功。")) {
+              resolve({ ok: true, bodyText: text });
+              return;
+            }
+            if (Date.now() - startedAt > 20000) {
+              resolve({ ok: false, reason: "attachment chat reply did not appear", bodyText: text, html: document.documentElement.outerHTML });
+              return;
+            }
+            setTimeout(tick, 150);
+          };
+          tick();
+        }, 100);
+      })
+    `,
+  });
+  const attachmentSend = attachmentSendResult.result?.value || {};
+  assert(attachmentSend.ok, `Agent Home did not send text+image attachments through chat: ${JSON.stringify(attachmentSend).slice(0, 2000)}`);
+  const attachmentLastChat = await waitForJson(`http://127.0.0.1:${mockProviderPort}/__last-chat`);
+  assert(attachmentLastChat.model === "smoke-model", `attachment chat should use saved model id: ${JSON.stringify(attachmentLastChat)}`);
+  assert(attachmentLastChat.authorization === "[present]", `attachment chat should send Authorization header: ${JSON.stringify(attachmentLastChat)}`);
+  assert(Number(attachmentLastChat.imagePartCount || 0) >= 1, `attachment chat should include image_url part for multimodal input: ${JSON.stringify(attachmentLastChat).slice(0, 2000)}`);
+  assert(String(attachmentLastChat.text || "").includes("phase2-receipt.txt"), `attachment chat should include text attachment filename: ${JSON.stringify(attachmentLastChat).slice(0, 2000)}`);
+  assert(String(attachmentLastChat.text || "").includes("文件片段进入模型请求"), `attachment chat should include parsed text attachment preview: ${JSON.stringify(attachmentLastChat).slice(0, 2000)}`);
+  assert(Array.isArray(attachmentLastChat.imageUrls) && attachmentLastChat.imageUrls.some((url) => String(url).startsWith("data:image/png;base64,")), `attachment chat should include image data URL: ${JSON.stringify(attachmentLastChat).slice(0, 2000)}`);
+  const metadataAttachmentReceiptResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        document.querySelector('[data-testid="composer-clear-attachments"]')?.click();
+        const input = document.querySelector('[data-testid="agent-home-composer-attachment-input"]');
+        if (!input) {
+          resolve({ ok: false, reason: "missing attachment input", html: document.documentElement.outerHTML });
+          return;
+        }
+        try {
+          const file = new File([new Uint8Array([1, 2, 3, 4, 5])], "metadata-only.bin", { type: "application/octet-stream" });
+          const transfer = new DataTransfer();
+          transfer.items.add(file);
+          Object.defineProperty(input, "files", { value: transfer.files, configurable: true });
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (error) {
+          resolve({ ok: false, reason: String(error && error.message || error), html: document.documentElement.outerHTML });
+          return;
+        }
+        const startedAt = Date.now();
+        const tick = () => {
+          const receipt = document.querySelector('[data-testid="agent-home-composer-attachment-receipt"]');
+          const card = document.querySelector('[data-testid="agent-home-composer-attachment-card"]');
+          if (receipt && card && card.getAttribute("data-attachment-kind") === "file") {
+            resolve({
+              ok: true,
+              receiptText: receipt.innerText.replace(/\\s+/g, " ").trim(),
+              cardText: card.innerText.replace(/\\s+/g, " ").trim(),
+              hasModelPayload: receipt.getAttribute("data-has-model-payload"),
+              imageCount: receipt.getAttribute("data-image-count"),
+              parsedFileCount: receipt.getAttribute("data-parsed-file-count"),
+              metadataFileCount: receipt.getAttribute("data-metadata-file-count"),
+              failedFileCount: receipt.getAttribute("data-failed-file-count"),
+              status: receipt.getAttribute("data-status"),
+              rejectedFromModel: receipt.getAttribute("data-rejected-from-model"),
+              cardParseStatus: card.getAttribute("data-parse-status"),
+            });
+            return;
+          }
+          if (Date.now() - startedAt > 8000) {
+            resolve({ ok: false, reason: "metadata attachment receipt did not appear", text: document.body.innerText, html: document.documentElement.outerHTML });
+            return;
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      })
+    `,
+  });
+  const metadataAttachmentReceipt = metadataAttachmentReceiptResult.result?.value || {};
+  assert(metadataAttachmentReceipt.ok, `Agent Home metadata attachment receipt did not render after upload: ${JSON.stringify(metadataAttachmentReceipt).slice(0, 2000)}`);
+  assert(metadataAttachmentReceipt.hasModelPayload === "false", `metadata-only attachment should not expose model payload: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.imageCount === "0", `metadata-only attachment should expose zero image count: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.parsedFileCount === "0", `metadata-only attachment should expose zero parsed file count: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.metadataFileCount === "1", `metadata-only attachment should expose metadata file count: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.failedFileCount === "0", `metadata-only attachment should expose zero failed file count: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.status === "仅摘要/元数据", `metadata-only attachment must not claim model request delivery: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.rejectedFromModel === "false", `metadata-only attachment should not be oversized rejected: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  assert(metadataAttachmentReceipt.cardParseStatus === "metadata", `metadata attachment card should expose metadata status: ${JSON.stringify(metadataAttachmentReceipt)}`);
+  const projectFilesRailResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const button = document.querySelector('[data-testid="agent-home-side-tab-files"]');
+        if (!button) {
+          resolve({ ok: false, reason: "missing files tab", html: document.documentElement.outerHTML });
+          return;
+        }
+        button.click();
+        const startedAt = Date.now();
+        const targetRoot = "C:\\\\ZhimengBrowserSmoke\\\\ProjectA";
+        const setNativeValue = (element, value) => {
+          const proto = Object.getPrototypeOf(element);
+          const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+          descriptor?.set?.call(element, value);
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        let rootSaved = false;
+        const rectOf = (element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        };
+        const tick = () => {
+          const side = document.querySelector('[data-testid="agent-home-side-tabs"]');
+          const workflow = document.querySelector('[data-testid="home-files-workflow"]') || Array.from(document.querySelectorAll("*")).find((node) => (node.innerText || "").includes("项目文件工作流"));
+          const rootInput = document.querySelector('[data-testid="home-workspace-root-input"]');
+          const rootSave = document.querySelector('[data-testid="home-workspace-root-save"]');
+          const rootScan = document.querySelector('[data-testid="home-workspace-root-scan"]');
+          const preview = document.querySelector('[data-testid="home-index-preview-file"]');
+          const attachFile = document.querySelector('[data-testid="home-index-attach-file"]');
+          const previewDiff = document.querySelector('[data-testid="home-index-preview-diff"]');
+          const attachIndex = document.querySelector('[data-testid="home-index-attach-index"]');
+          const sideText = side?.innerText.replace(/\\s+/g, " ").trim() || "";
+          if (side?.getAttribute('data-panel-state') === 'open' && workflow && rootInput && rootSave && rootScan && preview && attachFile && previewDiff && attachIndex) {
+            if (!rootSaved) {
+              setNativeValue(rootInput, targetRoot);
+              setTimeout(() => rootSave.click(), 80);
+              rootSaved = true;
+            }
+            const profiles = JSON.parse(localStorage.getItem("zhimeng-workspace-root-profiles") || "[]");
+            const savedProfile = Array.isArray(profiles) ? profiles.find((item) => item && item.rootPath === targetRoot) : null;
+            const updatedSideText = side.innerText.replace(/\\s+/g, " ").trim();
+            if (savedProfile && updatedSideText.includes(targetRoot)) {
+              resolve({
+                ok: true,
+                sideState: side.getAttribute('data-panel-state'),
+                sideText: updatedSideText,
+                savedProfile: {
+                  workspaceId: savedProfile.workspaceId,
+                  rootPath: savedProfile.rootPath,
+                  accessMode: savedProfile.accessMode,
+                },
+                layout: {
+                  side: rectOf(side),
+                  workflow: rectOf(workflow),
+                },
+                actions: {
+                  rootSaveDisabled: rootSave.disabled,
+                  rootScanDisabled: rootScan.disabled,
+                  previewDisabled: preview.disabled,
+                  attachFileDisabled: attachFile.disabled,
+                  previewDiffDisabled: previewDiff.disabled,
+                  attachIndexDisabled: attachIndex.disabled,
+                },
+              });
+              return;
+            }
+          }
+          if (Date.now() - startedAt > 8000) {
+            const profiles = JSON.parse(localStorage.getItem("zhimeng-workspace-root-profiles") || "[]");
+            resolve({
+              ok: false,
+              reason: "project files rail did not expose workflow or persist root binding",
+              sideState: side?.getAttribute('data-panel-state') || "",
+              profiles,
+              text: document.body.innerText,
+              html: document.documentElement.outerHTML,
+            });
+            return;
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      })
+    `,
+  });
+  const projectFilesRail = projectFilesRailResult.result?.value || {};
+  assert(projectFilesRail.ok, `Agent Home files rail did not expose project workflow: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(projectFilesRail.sideState === "open", `files rail should open the right sidebar: ${JSON.stringify(projectFilesRail)}`);
+  assert(String(projectFilesRail.sideText || "").includes("项目文件工作流"), `files rail should name the project file workflow: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(String(projectFilesRail.sideText || "").includes("绑定目录") && String(projectFilesRail.sideText || "").includes("当前"), `files rail should expose the current project workflow step: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(String(projectFilesRail.sideText || "").includes("绑定") && String(projectFilesRail.sideText || "").includes("扫描"), `files rail should guide binding and scanning: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(String(projectFilesRail.sideText || "").includes("预览正文") && String(projectFilesRail.sideText || "").includes("生成 Diff"), `files rail should guide preview and Diff: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(projectFilesRail.savedProfile?.rootPath === "C:\\ZhimengBrowserSmoke\\ProjectA", `files rail should persist the bound project root: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(projectFilesRail.savedProfile?.accessMode === "read_only", `first project root binding should upgrade to read_only: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(String(projectFilesRail.sideText || "").includes("C:\\ZhimengBrowserSmoke\\ProjectA"), `files rail should reflect saved project root path: ${JSON.stringify(projectFilesRail).slice(0, 2000)}`);
+  assert(projectFilesRail.layout?.side?.width > 300, `files rail should expand to a usable project panel: ${JSON.stringify(projectFilesRail.layout)}`);
   const statusRailResult = await evaluateWithRetry(devtools, {
     awaitPromise: true,
     returnByValue: true,
@@ -477,13 +1301,65 @@ try {
   writeFileSync(screenshotPath, Buffer.from(screenshotResult.data, "base64"));
   assert(existsSync(screenshotPath), `screenshot not created: ${screenshotPath}`);
   assert(statSync(screenshotPath).size > 10000, `screenshot too small: ${screenshotPath}`);
+  const threadReloadResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        location.reload();
+        const startedAt = Date.now();
+        const tick = () => {
+          const bodyText = document.body.innerText;
+          const cards = Array.from(document.querySelectorAll('[data-testid="agent-home-composer-attachment-card"], .codex-message-attachment'));
+          const hasTextAttachment = cards.some((card) => (card.innerText || "").includes("phase2-receipt.txt"));
+          const hasImageAttachment = cards.some((card) => (card.innerText || "").includes("phase2-image.png") || card.getAttribute("data-attachment-kind") === "image");
+          if (
+            bodyText.includes("请确认你收到了这次首页上传的文件和图片。")
+            && bodyText.includes("浏览器模型配置冒烟成功。")
+            && hasTextAttachment
+            && hasImageAttachment
+          ) {
+            const spaces = JSON.parse(localStorage.getItem("zhimeng-agent-thread-spaces") || "{}");
+            resolve({
+              ok: true,
+              bodyText,
+              cardCount: cards.length,
+              storageSpaces: Object.keys(spaces.spaces || {}).sort().join(","),
+              hasUnboundStorage: Boolean(spaces.spaces?.unbound?.length),
+            });
+            return;
+          }
+          if (Date.now() - startedAt > 15000) {
+            resolve({
+              ok: false,
+              bodyText,
+              cardCount: cards.length,
+              cardsText: cards.map((card) => (card.innerText || "").replace(/\\s+/g, " ").trim()).slice(0, 6),
+              storage: localStorage.getItem("zhimeng-agent-thread-spaces"),
+              html: document.documentElement.outerHTML,
+            });
+            return;
+          }
+          setTimeout(tick, 150);
+        };
+        tick();
+      })
+    `,
+  });
+  const threadReload = threadReloadResult.result?.value || {};
+  assert(threadReload.ok, `Agent Home should persist free chat messages and attachments after browser reload: ${JSON.stringify(threadReload).slice(0, 2000)}`);
+  assert(String(threadReload.storageSpaces || "").includes("unbound"), `free chat should persist in unbound thread space: ${JSON.stringify(threadReload)}`);
+  assert(threadReload.hasUnboundStorage === true, `unbound thread storage should contain at least one thread: ${JSON.stringify(threadReload)}`);
   console.log(`phase2-agent-home-browser ok`);
-  console.log(`screenshot: ${screenshotPath}`);
+  console.log(`collapsed screenshot: ${collapsedScreenshotPath}`);
+  console.log(`status-open screenshot: ${screenshotPath}`);
 } catch (error) {
   throw error;
 } finally {
+  await closeBrowserByDevtools(devtools);
   devtools?.close();
   await stopBrowserProcess(browserProcess);
+  await stopBrowserProcess(mockProviderProcess);
   await new Promise((resolveClose) => server.close(resolveClose));
-  rmSync(browserDataDir, { recursive: true, force: true, maxRetries: 6, retryDelay: 250 });
+  await cleanupBrowserDataDir(browserDataDir);
 }

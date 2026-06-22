@@ -143,19 +143,26 @@ try {
   assert(contextCall, "context_pack was requested");
   assert(readCall, "read_file was requested");
   assert(scanCall, "workspace_scan was requested");
+  assertEqual(result.toolResults[0].action, "context_pack", "context_pack is the first retained tool result");
+  assertEqual(result.toolResults[0].purpose, "Agent Loop 预取 context_pack", "context_pack retained purpose");
+  assertEqual(result.toolResults[0].status, "ok", "context_pack retained status");
+  assert(result.toolResults[0].resultText.includes("context_pack"), "context_pack retained result text");
   assertEqual(readCall.body.execute, true, "read_file outer request executes");
   assertEqual(readCall.body.payload.execute, true, "read_file payload executes");
   assertEqual(readCall.body.payload.path, "README.md", "read_file keeps path");
   assertEqual(scanCall.body.execute, true, "workspace_scan outer request executes");
   assertEqual(scanCall.body.payload.execute, true, "workspace_scan payload executes");
   assert(loopPrompts.length === 1 && loopPrompts[0].reason === "tool_result", "tool result followup prompt emitted");
-  assert(loopPrompts[0].content.includes("<tool-result action=\"read_file\" status=\"ok\">"), "followup includes read_file tool result");
-  assert(loopPrompts[0].content.includes("<tool-result action=\"workspace_scan\" status=\"ok\">"), "followup includes workspace_scan tool result");
+  assert(loopPrompts[0].content.includes("<tool-result action=\"read_file\" status=\"ok\" request-id=\"req-read-1\">"), "followup includes read_file tool result with request id");
+  assert(loopPrompts[0].content.includes("<tool-result action=\"workspace_scan\" status=\"ok\" request-id=\"req-scan-1\">"), "followup includes workspace_scan tool result with request id");
   assert(loopPrompts[0].content.includes("# 织梦写作台"), "followup includes read content");
   assert(loopPrompts[0].content.includes("src/os/kernel/agent-loop.ts"), "followup includes scan content");
+  assert(result.toolResults.some((tool) => tool.action === "read_file" && tool.requestId === "req-read-1"), "read_file tool result keeps request id");
+  assert(result.toolResults.some((tool) => tool.action === "workspace_scan" && tool.requestId === "req-scan-1"), "workspace_scan tool result keeps request id");
+  assertEqual(result.toolResults.map((tool) => tool.action).join(","), "context_pack,read_file,workspace_scan", "tool result evidence keeps context before read tools");
   assertEqual(sentMessages.length, 2, "model called twice");
-  assert(sentMessages[1].some((message) => message.role === "user" && message.content.includes("<tool-result action=\"read_file\" status=\"ok\">")), "second model call receives tool result");
-  assert(sentMessages[1].some((message) => message.role === "user" && message.content.includes("<tool-result action=\"workspace_scan\" status=\"ok\">")), "second model call receives scan result");
+  assert(sentMessages[1].some((message) => message.role === "user" && message.content.includes("<tool-result action=\"read_file\" status=\"ok\" request-id=\"req-read-1\">")), "second model call receives tool result with request id");
+  assert(sentMessages[1].some((message) => message.role === "user" && message.content.includes("<tool-result action=\"workspace_scan\" status=\"ok\" request-id=\"req-scan-1\">")), "second model call receives scan result with request id");
 } finally {
   globalThis.fetch = originalFetch;
 }

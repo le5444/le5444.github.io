@@ -24,7 +24,9 @@ const checks = [
   ["项目目录绑定", "scripts/verify-workspace-root-binding.mjs"],
   ["项目目录扫描", "scripts/verify-workspace-scan-index.mjs"],
   ["项目文件预览", "scripts/verify-workspace-read-preview.mjs"],
+  ["项目文件上下文注入模型请求", "scripts/verify-workspace-read-context-injection.mjs"],
   ["写文件 Diff 草案", "scripts/verify-write-file-diff-draft.mjs"],
+  ["浏览器自定义 Provider 聊天", "scripts/verify-phase1-browser-chat.mjs"],
 ];
 
 for (const [label, script] of checks) {

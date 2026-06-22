@@ -366,6 +366,12 @@ export function buildAgentBridgeRequestDisplaySummary(
   options: AgentBridgeRequestDisplaySummaryOptions = {},
 ) {
   const sanitizePurpose = options.sanitizePurpose || ((purpose: string) => purpose);
+  const nextStepForRequest = (trace: AgentBridgeRequestTraceRecord) => {
+    if (trace.validation_blocks) return "下一步：先处理阻断校验，本次不应直接执行。";
+    if (trace.approval_required) return "下一步：进入审批队列，等待用户确认或拒绝。";
+    if (trace.action === "write_file") return "下一步：转成 Diff 草案，等待人工审查变更。";
+    return "下一步：交给 Gateway 执行，并把结果回灌到当前对话。";
+  };
   return requests.map((request, index) => {
     const trace = buildAgentBridgeRequestTraceRecord(request, 0, index, requests.length);
     const purpose = sanitizePurpose(trace.purpose);
@@ -376,6 +382,7 @@ export function buildAgentBridgeRequestDisplaySummary(
       trace.validation_blocks || trace.validation_warnings
         ? `校验：${trace.validation_blocks} 阻断 / ${trace.validation_warnings} 警告`
         : "校验：通过",
+      nextStepForRequest(trace),
     ].filter(Boolean).join("\n");
   }).join("\n\n");
 }
@@ -441,15 +448,26 @@ export function buildAgentBridgeToolResultSummary(
 ) {
   const labelStatus = options.statusLabel || ((status: string) => status || "unknown");
   const compactApproval = options.compactApprovalId || ((id: string) => id);
+  const nextStepForResult = (item: AgentBridgeToolResultLike) => {
+    const status = (item.status || "").toLowerCase();
+    if (status.includes("approval") || status.includes("waiting_approval")) return "下一步：到审批面板确认、拒绝或等待人工处理。";
+    if (status.includes("diff")) return "下一步：到变更 / Diff 面板逐项审查 hunk。";
+    if (status.includes("error") || status.includes("blocked") || status.includes("failed")) return "下一步：检查错误原因，调整请求或配置后重试。";
+    if (status.includes("partial")) return "下一步：先处理部分失败项，再让模型继续推理。";
+    return "下一步：结果已回灌，模型可以基于证据继续推理。";
+  };
   return items.map((item, index) => {
+    const requestId = agentBridgeResultId(item.result, "request_id", "requestId");
     const approvalId = agentBridgeResultId(item.result, "approval_id", "approvalId");
     const runId = agentBridgeResultId(item.result, "run_id", "runId");
     return [
       `${index + 1}. ${item.action}`,
       `状态：${labelStatus(item.status)}`,
+      requestId ? `请求：${requestId}` : "",
       approvalId ? `审批：${compactApproval(approvalId)}` : "",
       runId ? `运行：${runId}` : "",
       item.detail ? `结果：${item.detail.slice(0, 420)}` : "",
+      nextStepForResult(item),
     ].filter(Boolean).join("\n");
   }).join("\n\n");
 }

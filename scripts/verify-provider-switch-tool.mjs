@@ -32,6 +32,22 @@ async function waitForModels(url, timeoutMs = 5000) {
   throw new Error(`Timed out waiting for ${url}`);
 }
 
+async function waitForJson(url, timeoutMs = 5000) {
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) return await response.json();
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  throw lastError || new Error(`Timed out waiting for ${url}`);
+}
+
 function run(label, command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -154,9 +170,26 @@ try {
   ]);
   const localProbe = parseJsonOutput("Provider switch local probe", localProbeOutput);
   assert(localProbe.status === "ok", "Local Provider probe should succeed");
-  assert(localProbe.modelCount === 1, "Local Provider probe should report one model");
+  assert(localProbe.modelCount >= 1, "Local Provider probe should report returned models");
   assert(localProbe.models?.some((model) => model.id === "smoke-model"), "Local Provider probe should include smoke-model");
   assert(localProbe.config?.apiKey === "[present:redacted]", "Local Provider probe output should redact apiKey");
+  const chatSmokeOutput = run("Provider switch local chat smoke", "python", [
+    "desktop/zhimeng_provider_switch.py",
+    "chat-smoke",
+    "--config",
+    configPath,
+    "--prompt",
+    "Reply provider switch chat smoke.",
+  ]);
+  const chatSmoke = parseJsonOutput("Provider switch local chat smoke", chatSmokeOutput);
+  assert(chatSmoke.status === "ok", "Local Provider chat-smoke should succeed");
+  assert(Number(chatSmoke.outputChars || 0) > 0, `Local Provider chat-smoke should return non-empty model output: ${chatSmokeOutput}`);
+  assert(chatSmoke.config?.apiKey === "[present:redacted]", "Local Provider chat-smoke output should redact apiKey");
+  assert(!chatSmokeOutput.includes("sk-test-local-provider-switch"), "Local Provider chat-smoke output must not echo apiKey");
+  const chatLast = await waitForJson(`http://127.0.0.1:${port}/__last-chat`);
+  assert(chatLast.model === "smoke-model", "Local Provider chat-smoke should send saved model id");
+  assert(chatLast.authorization === "[present]", "Local Provider chat-smoke should send authorization without echoing key");
+  assert(String(chatLast.text || "").includes("Reply provider switch chat smoke."), "Local Provider chat-smoke should send prompt text");
 } finally {
   mock.kill("SIGTERM");
   if (stderr.trim()) {

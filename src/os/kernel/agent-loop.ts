@@ -63,6 +63,7 @@ export interface AgentResult {
 }
 
 export interface AgentToolResult {
+  requestId?: string;
   action: string;
   purpose: string;
   status: string;
@@ -168,6 +169,17 @@ function gatewayContextPackPayload(
 ) {
   const workspaceRootProfile = asRecord(agentContext.workspace_root_profile);
   const workspaceScanIndex = asRecord(agentContext.workspace_scan_index);
+  const existingPolicy = asRecord(agentContext.thread_context_policy);
+  const existingUses = asArray(existingPolicy.uses).map((item) => String(item)).filter(Boolean);
+  const policyUses = Array.from(new Set([
+    ...existingUses,
+    "instruction_stack",
+    "agent_thread_runbook",
+    "thread_context",
+    "context_pack",
+    "memory_retrieve",
+    "skill_route",
+  ]));
   return {
     task: userInput,
     domain: plan.domain,
@@ -179,6 +191,15 @@ function gatewayContextPackPayload(
     workspace_id: asString(agentContext.workspace_id),
     approval_ids: asArray(agentContext.approval_ids).map((item) => String(item)).filter(Boolean).slice(0, 20),
     thread_context: threadContextFromAgentContext(agentContext),
+    thread_context_policy: {
+      mode: asString(existingPolicy.mode) || "agent-loop-compact-attachments",
+      execution: "read-only-no-file-write",
+      instruction_stack: asString(existingPolicy.instruction_stack) || "auto-injected-project-agent-rules",
+      runbook: asString(existingPolicy.runbook) || "auto-injected-current-thread-status",
+      uses: policyUses,
+      max_items: Number(existingPolicy.max_items) || 12,
+      source: asString(existingPolicy.source) || "Agent Loop context_pack",
+    },
     ...(Object.keys(workspaceRootProfile).length ? { workspace_root_profile: workspaceRootProfile } : {}),
     ...(Object.keys(workspaceScanIndex).length ? { workspace_scan_index: workspaceScanIndex } : {}),
   };
@@ -339,6 +360,7 @@ function buildWriteFileDiffToolResult(
   });
   if (!draft) {
     return {
+      requestId: asString(agentContext.request_id),
       action: "write_file",
       purpose,
       status: "blocked",
@@ -356,6 +378,7 @@ function buildWriteFileDiffToolResult(
     };
   }
   return {
+    requestId: asString(agentContext.request_id),
     action: "write_file",
     purpose,
     status: "diff_draft",
@@ -419,6 +442,7 @@ async function callGateway(
     const raw = await res.text();
     if (!res.ok) {
       return {
+        requestId: asString(agentContext.request_id),
         action,
         purpose,
         status: "error",
@@ -431,6 +455,7 @@ async function callGateway(
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const parsedAgentContext = asRecord(parsed.agent_context);
       return {
+        requestId: asString(agentContext.request_id),
         action,
         purpose,
         status: String(parsed.status || parsed.result_status || "ok"),
@@ -443,6 +468,7 @@ async function callGateway(
       };
     } catch {
       return {
+        requestId: asString(agentContext.request_id),
         action,
         purpose,
         status: "ok",
@@ -453,6 +479,7 @@ async function callGateway(
     }
   } catch (e) {
     return {
+      requestId: asString(agentContext.request_id),
       action,
       purpose,
       status: "error",
@@ -658,7 +685,10 @@ export async function runAgentLoop(
 
       // 把工具结果追加到消息中，让模型知道发生了什么
       const toolResultText = currentToolResults
-        .map((r) => `<tool-result action="${r.action}" status="${r.status}">\n${r.resultText}\n</tool-result>`)
+        .map((r) => {
+          const requestAttr = r.requestId ? ` request-id="${r.requestId}"` : "";
+          return `<tool-result action="${r.action}" status="${r.status}"${requestAttr}>\n${r.resultText}\n</tool-result>`;
+        })
         .join("\n");
 
       const toolResultPrompt = `${buildOneShotToolFollowupPrompt({

@@ -126,7 +126,11 @@ function providerModelsFromGatewayResult(result: unknown): ModelDiscoveryItem[] 
   const data = asRecord(result);
   const probe = asRecord(data.provider_probe || data);
   const json = asRecord(probe.json);
-  const rawItems = asRecordList(json.data).length ? asRecordList(json.data) : asRecordList(json.models);
+  const rawItems = asRecordList(json.data).length
+    ? asRecordList(json.data)
+    : asRecordList(json.models).length
+      ? asRecordList(json.models)
+      : asRecordList(json);
   return rawItems
     .map((item, index) => {
       const id = asString(item.id, asString(item.name, asString(item.model, `model-${index + 1}`))).trim();
@@ -145,6 +149,53 @@ function providerModelsFromGatewayResult(result: unknown): ModelDiscoveryItem[] 
       };
     })
     .filter((item) => item.id);
+}
+
+function buildDirectModelDiscoveryRequest(provider: ProviderId, apiUrl: string, apiKey: string) {
+  const base = apiUrl.trim().replace(/\/+$/, "");
+  if (!base) return null;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (provider === "gemini") {
+    return {
+      url: `${base}/models?key=${encodeURIComponent(apiKey)}`,
+      headers,
+    };
+  }
+  if (provider === "anthropic") {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+    headers["anthropic-dangerous-direct-browser-access"] = "true";
+    return {
+      url: `${base}/models`,
+      headers,
+    };
+  }
+  if (provider === "ollama" && !base.endsWith("/v1")) {
+    return {
+      url: `${base}/api/tags`,
+      headers,
+    };
+  }
+  if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey}`;
+  return {
+    url: `${base}/models`,
+    headers,
+  };
+}
+
+async function discoverModelsDirect(provider: ProviderId, apiUrl: string, apiKey: string) {
+  const request = buildDirectModelDiscoveryRequest(provider, apiUrl, apiKey);
+  if (!request) throw new Error("请先填写接口地址。");
+  const res = await fetch(request.url, { method: "GET", headers: request.headers });
+  const json = await res.json().catch(async () => ({ error: await res.text().catch(() => "") }));
+  if (!res.ok) {
+    const error = asRecord(json).error;
+    const detail = typeof error === "string" ? error : asString(asRecord(error).message, asString(asRecord(json).message));
+    throw new Error(`直连 /models 返回 HTTP ${res.status}${detail ? `：${detail}` : ""}`);
+  }
+  return providerModelsFromGatewayResult({
+    json: provider === "ollama" ? { data: asRecordList(asRecord(json).models).map((item) => ({ ...item, id: asString(item.name) })) } : json,
+  });
 }
 
 function providerProbeFailureMessage(probe: Record<string, unknown>) {
@@ -167,10 +218,88 @@ function providerProbeFailureMessage(probe: Record<string, unknown>) {
   return (reason || text || "模型列表获取失败。").slice(0, 260);
 }
 
+function normalizeConfigKey(key: string) {
+  return key.toLowerCase().replace(/[\s_.-]+/g, "");
+}
+
+function collectConfigRecords(value: unknown, depth = 0): Record<string, unknown>[] {
+  if (depth > 3 || !value || typeof value !== "object") return [];
+  if (Array.isArray(value)) return value.flatMap((item) => collectConfigRecords(item, depth + 1));
+  const record = value as Record<string, unknown>;
+  return [
+    record,
+    ...Object.values(record).flatMap((item) => collectConfigRecords(item, depth + 1)),
+  ];
+}
+
+function findConfigValue(records: Record<string, unknown>[], aliases: string[]) {
+  const normalizedAliases = new Set(aliases.map(normalizeConfigKey));
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      if (!normalizedAliases.has(normalizeConfigKey(key))) continue;
+      const text = asString(value).trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function extractConfigValueFromText(source: string, aliases: string[]) {
+  const escapedAliases = aliases.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const pattern = new RegExp(`["']?(${escapedAliases})["']?\\s*[:=]\\s*["']?([^"',\\n\\r}]+)`, "i");
+  const match = source.match(pattern);
+  return match?.[2]?.trim() || "";
+}
+
+function normalizeProviderIdFromText(rawProvider: string): ProviderId | "" {
+  const value = rawProvider.trim().toLowerCase();
+  if (!value) return "";
+  if (value.includes("anthropic") || value.includes("claude")) return "anthropic";
+  if (value.includes("gemini") || value.includes("google")) return "gemini";
+  if (value.includes("ollama")) return "ollama";
+  if (value.includes("openai") || value.includes("compatible") || value.includes("router") || value.includes("codex2api")) return "openai-compatible";
+  return "";
+}
+
+function parseProviderConfigPaste(source: string) {
+  const text = source.trim();
+  const records: Record<string, unknown>[] = [];
+  if (text) {
+    for (const candidate of [text, text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)]) {
+      if (!candidate || !candidate.trim().startsWith("{")) continue;
+      try {
+        records.push(...collectConfigRecords(JSON.parse(candidate)));
+        break;
+      } catch {
+        /* fall through to loose text parsing */
+      }
+    }
+  }
+  const get = (aliases: string[]) => (
+    findConfigValue(records, aliases) || extractConfigValueFromText(text, aliases)
+  ).trim();
+  const apiUrl = get(["apiUrl", "api_url", "baseURL", "baseUrl", "base_url", "endpoint", "url"]);
+  const apiKey = get(["apiKey", "api_key", "apikey", "api-key", "key", "token"]);
+  const modelId = get(["modelId", "model_id", "model", "modelName", "model_name"]);
+  const modelName = get(["displayName", "display_name", "modelLabel", "model_label", "name"]);
+  const rawProvider = get(["provider", "providerId", "provider_id", "type"]);
+  const provider = normalizeProviderIdFromText(rawProvider);
+  return {
+    apiUrl,
+    apiKey,
+    modelId,
+    modelName,
+    provider,
+  };
+}
+
 // Settings Modal
 export function SettingsModal({ open, settings, onClose, onSave }: { open: boolean; settings: ApiSettings; onClose: () => void; onSave: (next: ApiSettings) => void; }) {
   const [form, setForm] = useState<ApiSettings>(settings);
   const [showKey, setShowKey] = useState(false);
+  const [configPasteText, setConfigPasteText] = useState("");
+  const [configPasteMessage, setConfigPasteMessage] = useState("");
+  const [configSaveMessage, setConfigSaveMessage] = useState("");
   const [presetSearch, setPresetSearch] = useState("");
   const [presetGroup, setPresetGroup] = useState<ProviderGroupTab>("all");
   const [modelDiscoveryStatus, setModelDiscoveryStatus] = useState<ModelDiscoveryStatus>("idle");
@@ -179,7 +308,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   const [modelDiscoverySearch, setModelDiscoverySearch] = useState("");
   const [modelDiscoveryTag, setModelDiscoveryTag] = useState<ModelDiscoveryTagFilter>("all");
   useEffect(() => { if (open) setForm(settings); }, [open, settings]);
-  useEffect(() => { if (open) { setPresetSearch(""); setPresetGroup("all"); } }, [open]);
+  useEffect(() => { if (open) { setPresetSearch(""); setPresetGroup("all"); setConfigPasteText(""); setConfigPasteMessage(""); setConfigSaveMessage(""); } }, [open]);
   useEffect(() => {
     if (!open) return;
     setModelDiscoveryStatus("idle");
@@ -209,9 +338,8 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
     return PROVIDER_PRESETS.find((preset) => (
       preset.provider === (form.provider || inferProvider(form.apiUrl))
       && preset.apiUrl === form.apiUrl
-      && preset.modelId === form.modelId
     ))?.id;
-  }, [form.apiUrl, form.modelId, form.provider]);
+  }, [form.apiUrl, form.provider]);
   const filteredModelDiscoveryItems = useMemo(() => {
     const q = modelDiscoverySearch.trim().toLowerCase();
     return modelDiscoveryItems.filter((model) => {
@@ -223,17 +351,87 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
   if (!open) return null;
   const effectiveProvider: ProviderId = form.provider || inferProvider(form.apiUrl);
   const keyOptional = allowsEmptyApiKey(form.apiUrl, effectiveProvider);
-  const setField = <K extends keyof ApiSettings>(key: K, value: ApiSettings[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+  const savedProvider: ProviderId = settings.provider || inferProvider(settings.apiUrl);
+  const savedConfigReady = Boolean(settings.apiUrl.trim() && settings.modelId.trim() && (allowsEmptyApiKey(settings.apiUrl, savedProvider) || settings.apiKey.trim()));
+  const draftMatchesSaved = (
+    form.apiUrl === settings.apiUrl
+    && form.modelId === settings.modelId
+    && form.modelName === settings.modelName
+    && (form.provider || inferProvider(form.apiUrl)) === savedProvider
+    && form.apiKey === settings.apiKey
+  );
+  const currentConfigLabel = savedConfigReady
+    ? `${settings.modelName || settings.modelId} · ${formatPresetHost(settings.apiUrl)}`
+    : "尚未保存可用模型配置";
+  const setField = <K extends keyof ApiSettings>(key: K, value: ApiSettings[K]) => {
+    setConfigSaveMessage("");
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+  const normalizedForm = (next: ApiSettings): ApiSettings => ({
+    ...next,
+    apiUrl: next.apiUrl.trim().replace(/\/+$/, ""),
+    apiKey: next.apiKey.trim(),
+    modelId: next.modelId.trim(),
+    modelName: next.modelName.trim(),
+    provider: effectiveProvider,
+  });
+  const saveAndClose = () => {
+    const next = normalizedForm(form);
+    const nextProvider: ProviderId = next.provider || inferProvider(next.apiUrl);
+    const nextKeyOptional = allowsEmptyApiKey(next.apiUrl, nextProvider);
+    if (!next.apiUrl) {
+      setConfigSaveMessage("还没填接口地址 / baseURL；请先填服务商地址，例如 https://www.codex2api.com/v1。");
+      return;
+    }
+    if (!next.modelId) {
+      setConfigSaveMessage("还没填模型 ID；可以手填账号可用模型，也可以先点“获取账号模型”。");
+      return;
+    }
+    if (!nextKeyOptional && !next.apiKey) {
+      setConfigSaveMessage("这个接口需要 API key；请把 key 粘贴到上方密钥输入框。");
+      return;
+    }
+    setConfigSaveMessage("已保存 API 配置；首页 AI 对话会使用这组接口和模型。");
+    onSave(next);
+    onClose();
+  };
+  const applyPastedProviderConfig = () => {
+    const parsed = parseProviderConfigPaste(configPasteText);
+    const filled = [
+      parsed.apiUrl ? "接口地址" : "",
+      parsed.apiKey ? "API key" : "",
+      parsed.modelId ? "模型 ID" : "",
+      parsed.modelName ? "显示名称" : "",
+      parsed.provider ? "接口类型" : "",
+    ].filter(Boolean);
+    if (!filled.length) {
+      setConfigPasteMessage("没有识别到 baseURL / apiKey / model。可以直接用下面字段手填。");
+      return;
+    }
+    setForm((prev) => {
+      const nextApiUrl = (parsed.apiUrl || prev.apiUrl).trim().replace(/\/+$/, "");
+      return {
+        ...prev,
+        apiUrl: nextApiUrl,
+        apiKey: parsed.apiKey.trim() || prev.apiKey,
+        modelId: parsed.modelId.trim() || prev.modelId,
+        modelName: parsed.modelName.trim() || prev.modelName,
+        provider: parsed.provider || inferProvider(nextApiUrl),
+      };
+    });
+    setConfigSaveMessage("");
+    setConfigPasteMessage(`已解析并填入草稿：${filled.join("、")}。检查无误后点“保存 API 配置并用于聊天”。`);
+    setModelDiscoveryMessage("已从粘贴配置填入草稿；可先获取账号模型，也可以直接保存用于首页 AI 对话。");
+  };
   const applyPreset = (presetId: string) => {
     const preset = PROVIDER_PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
     setForm((prev) => ({
       ...prev,
       apiUrl: preset.apiUrl,
-      modelId: preset.modelId,
-      modelName: preset.modelName,
       provider: preset.provider,
     }));
+    setModelDiscoveryMessage("已套用端点模板；模型 ID 不会用模板覆盖，请手填或点击“获取账号模型”。");
   };
   const profiles = form.profiles || [];
   const modelDiscoveryNeedsRemoteAllow = !isLocalEndpoint(form.apiUrl);
@@ -360,7 +558,9 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
         : [snapshot, ...existing].slice(0, 60);
       return { ...base, profiles: nextProfiles, activeProfileId: snapshot.id };
     });
-    setModelDiscoveryMessage(saveProfile ? `已选择并保存 ${model.id}，点击“保存设置”后生效。` : `已填入模型 ID：${model.id}`);
+    setModelDiscoveryMessage(saveProfile
+      ? `已把 ${model.id} 填入草稿并保存为常用配置；点击“保存 API 配置”后首页生效。`
+      : `已把 ${model.id} 填入草稿；点击“保存 API 配置”后首页生效。`);
   };
   const discoverModels = async () => {
     if (!form.apiUrl.trim()) {
@@ -374,8 +574,30 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       return;
     }
     setModelDiscoveryStatus("running");
-    setModelDiscoveryMessage("正在通过 Gateway 读取 /models；不会调用模型生成。");
+    setModelDiscoveryMessage("正在读取 /models；优先走 Gateway，必要时自动尝试浏览器直连。");
     setModelDiscoveryItems([]);
+    const saveDiscoveryResult = (status: ModelDiscoveryStatus, message: string, models: ModelDiscoveryItem[], statusCode?: number) => {
+      setModelDiscoveryStatus(status);
+      setModelDiscoveryItems(models);
+      setModelDiscoveryMessage(message);
+      recordModelDiscovery({
+        apiUrl: form.apiUrl,
+        provider: effectiveProvider,
+        status,
+        statusCode,
+        message,
+        modelCount: models.length,
+        models: models.map((model) => ({
+          id: model.id,
+          displayName: model.displayName,
+          ownedBy: model.ownedBy,
+          type: model.type,
+          created: model.created || undefined,
+          tags: model.tags,
+        })),
+        keyPresent: Boolean(form.apiKey.trim()),
+      });
+    };
     try {
       const res = await fetch(GATEWAY_BRIDGE_URL, {
         method: "POST",
@@ -403,41 +625,26 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       const status = asString(probe.status, asString(result.status, "error")) as ModelDiscoveryStatus;
       const models = providerModelsFromGatewayResult(probe);
       const message = status === "ok"
-        ? models.length ? `已获取 ${models.length} 个模型；选择一个填入当前配置。` : "请求成功，但没有解析到模型列表。"
+        ? models.length ? `已获取 ${models.length} 个模型；先选择模型写入草稿，再点“保存 API 配置”让首页生效。` : "请求成功，但没有解析到模型列表。"
         : providerProbeFailureMessage(probe);
-      setModelDiscoveryStatus(status);
-      setModelDiscoveryItems(models);
-      setModelDiscoveryMessage(message);
-      recordModelDiscovery({
-        apiUrl: form.apiUrl,
-        provider: effectiveProvider,
-        status,
-        statusCode: asNumber(probe.status_code) || undefined,
-        message,
-        modelCount: models.length,
-        models: models.map((model) => ({
-          id: model.id,
-          displayName: model.displayName,
-          ownedBy: model.ownedBy,
-          type: model.type,
-          created: model.created || undefined,
-          tags: model.tags,
-        })),
-        keyPresent: Boolean(form.apiKey.trim()),
-      });
+      if (status === "ok") {
+        saveDiscoveryResult(status, message, models, asNumber(probe.status_code) || undefined);
+        return;
+      }
+      throw new Error(message);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "模型列表获取失败。";
-      setModelDiscoveryStatus("error");
-      setModelDiscoveryMessage(message);
-      recordModelDiscovery({
-        apiUrl: form.apiUrl,
-        provider: effectiveProvider,
-        status: "error",
-        message,
-        modelCount: 0,
-        models: [],
-        keyPresent: Boolean(form.apiKey.trim()),
-      });
+      const gatewayMessage = error instanceof Error ? error.message : "Gateway 模型列表获取失败。";
+      try {
+        setModelDiscoveryMessage(`${gatewayMessage} 正在尝试浏览器直连 /models...`);
+        const models = await discoverModelsDirect(effectiveProvider, form.apiUrl, form.apiKey);
+        const message = models.length
+          ? `已直连获取 ${models.length} 个模型；先选择模型写入草稿，再点“保存 API 配置”让首页生效。`
+          : "直连请求成功，但没有解析到模型列表。";
+        saveDiscoveryResult("ok", message, models);
+      } catch (directError) {
+        const directMessage = directError instanceof Error ? directError.message : "直连模型列表也失败。";
+        saveDiscoveryResult("error", `${gatewayMessage}；${directMessage}`, []);
+      }
     }
   };
   return (
@@ -447,20 +654,185 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-cyan-200"><Settings className="h-5 w-5" /></div>
             <div>
-              <h2 className="text-lg font-semibold text-white">接口设置</h2>
-              <p className="text-xs text-slate-500">配置服务商、接口地址、密钥和模型 ID。</p>
+              <h2 className="text-lg font-semibold text-white">模型设置</h2>
+              <p className="text-xs text-slate-500">自定义 API 是主入口；端点模板只是帮你少填地址。</p>
             </div>
           </div>
           <button onClick={onClose} className="rounded-xl p-2 text-slate-500 hover:bg-slate-800 hover:text-white"><X className="h-5 w-5" /></button>
         </div>
 
         <div className="settings-modal-body space-y-4 overflow-y-auto px-5 py-5">
+          <div className="settings-modal-section grid gap-4 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4 md:grid-cols-2" data-testid="settings-provider-custom-quickstart">
+            <div className="md:col-span-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-blue-100">
+                <Settings className="h-4 w-4" />
+                <span>自定义 API 配置</span>
+                <span className="rounded-full border border-blue-400/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-100">优先使用这里</span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">这里就是你要输 key 的地方：可以直接手填接口地址、API key 和模型 ID，也可以粘贴 cc switch / JSON 配置解析成草稿。下方端点模板只帮你填地址，不会覆盖模型 ID；保存时会自动去掉复制进来的前后空格；点“保存 API 配置并用于聊天”后 AI 对话立即使用。</p>
+              <div className="mt-3 rounded-xl border border-blue-400/20 bg-slate-950/35 p-3" data-testid="settings-provider-paste-parser">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="text-xs font-semibold text-blue-100">粘贴配置并解析</div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">支持 cc switch / JSON / 普通文本里的 baseURL、apiUrl、apiKey、modelId。解析只填草稿，不会自动保存或请求模型。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={applyPastedProviderConfig}
+                    data-testid="settings-parse-provider-config-button"
+                    className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-blue-400/30 bg-blue-500/15 px-3 py-2 text-xs font-medium text-blue-50 transition-colors hover:bg-blue-500/25"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    解析到草稿
+                  </button>
+                </div>
+                <textarea
+                  data-testid="settings-provider-config-paste-input"
+                  value={configPasteText}
+                  onChange={(event) => setConfigPasteText(event.target.value)}
+                  placeholder={'例如：{"baseURL":"https://www.codex2api.com/v1","apiKey":"sk-...","model":"gpt-..."}'}
+                  className="mt-2 min-h-20 w-full resize-y rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 font-mono text-xs text-white outline-none focus:border-blue-500"
+                />
+                {configPasteMessage && (
+                  <div className="mt-2 rounded-lg border border-slate-700 bg-slate-950/45 px-2.5 py-1.5 text-[11px] leading-relaxed text-slate-400" data-testid="settings-provider-config-paste-message">
+                    {configPasteMessage}
+                  </div>
+                )}
+                {configSaveMessage && (
+                  <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-100" data-testid="settings-save-status">
+                    {configSaveMessage}
+                  </div>
+                )}
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-4" data-testid="settings-config-flow">
+                {[
+                  ["1", "填接口和密钥", "复制进来的空格会自动清理"],
+                  ["2", "获取账号模型", "用 /models 读取真实可用模型"],
+                  ["3", "保存并用于聊天", "首页模型胶囊会同步刷新"],
+                  ["4", "回到输入框测试", "能回复后再继续任务"],
+                ].map(([step, title, detail]) => (
+                  <div key={step} className="rounded-xl border border-slate-700 bg-slate-950/35 px-3 py-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-blue-100">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-blue-500/15 text-[11px]">{step}</span>
+                      <span className="truncate">{title}</span>
+                    </div>
+                    <div className="mt-1 text-[11px] leading-snug text-slate-500">{detail}</div>
+                  </div>
+                ))}
+              </div>
+              <div
+                className={`mt-3 flex flex-col gap-2 rounded-xl border px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between ${savedConfigReady ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100" : "border-amber-500/25 bg-amber-500/10 text-amber-100"}`}
+                data-testid="settings-current-provider-status"
+              >
+                <span className="min-w-0 truncate">
+                  当前首页正在使用：<span className="font-medium">{currentConfigLabel}</span>
+                </span>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 ${draftMatchesSaved && savedConfigReady ? "bg-emerald-500/15 text-emerald-100" : "bg-slate-950/40 text-slate-300"}`}>
+                  {draftMatchesSaved && savedConfigReady ? "已保存生效" : savedConfigReady ? "草稿未保存" : "待保存"}
+                </span>
+              </div>
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-slate-300">接口地址 / baseURL *</label>
+              <input
+                data-testid="settings-custom-api-url-input"
+                value={form.apiUrl}
+                onChange={(e) => setField("apiUrl", e.target.value)}
+                placeholder="https://www.codex2api.com/v1 或 https://api.openai.com/v1"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+              />
+              <p className="mt-1 text-xs text-slate-500">OpenAI 兼容一般填到 /v1；例如 https://www.codex2api.com/v1。发送时会自动拼接 /chat/completions。</p>
+            </div>
+              <div data-testid="settings-custom-api-key-field">
+              <label className="mb-1 flex items-center justify-between gap-2 text-sm font-medium text-slate-300">
+                <span>密钥 / API key {!keyOptional && "*"}</span>
+                <span className="text-[11px] font-normal text-slate-500">复制 key 到这里</span>
+              </label>
+              <div className="relative">
+                <input
+                  data-testid="settings-custom-api-key-input"
+                  type={showKey ? "text" : "password"}
+                  value={form.apiKey}
+                  onChange={(e) => setField("apiKey", e.target.value)}
+                  placeholder={keyOptional ? "本地端点可留空" : "sk-..."}
+                  className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 pr-12 text-sm text-white outline-none focus:border-blue-500"
+                />
+                <button type="button" onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-300">模型 ID *</label>
+              <input
+                data-testid="settings-custom-model-id-input"
+                value={form.modelId}
+                onChange={(e) => setField("modelId", e.target.value)}
+                placeholder="手填账号可用模型 ID，或点下方获取账号模型"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-300">接口类型</label>
+              <select
+                data-testid="settings-custom-provider-select"
+                value={effectiveProvider}
+                onChange={(e) => setField("provider", e.target.value as ProviderId)}
+                className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+              >
+                {(Object.keys(PROVIDER_LABELS) as ProviderId[]).map((id) => (
+                  <option key={id} value={id}>{PROVIDER_LABELS[id]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-300">显示名称</label>
+              <input
+                data-testid="settings-custom-model-name-input"
+                value={form.modelName}
+                onChange={(e) => setField("modelName", e.target.value)}
+                placeholder="例：Codex2API / DeepSeek / 本地服务端点"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+              />
+            </div>
+            <div className="md:col-span-2 flex flex-col gap-2 rounded-2xl border border-blue-400/20 bg-slate-950/35 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs leading-relaxed text-slate-400">
+                <span className="font-medium text-blue-100">不知道模型 ID？</span>
+                <span> 填好接口和密钥后直接读取 `/models`，选中模型会自动写回上面的模型 ID。</span>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={discoverModels}
+                  disabled={!canDiscoverModels}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-400/30 bg-blue-500/15 px-3 py-2 text-xs font-medium text-blue-50 transition-colors hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {modelDiscoveryStatus === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}
+                  获取账号模型
+                </button>
+                <button
+                  type="button"
+                  data-testid="settings-quick-save-button"
+                  onClick={saveAndClose}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-white"
+                >
+                  保存 API 配置并用于聊天
+                </button>
+              </div>
+            </div>
+          </div>
           {/* 快速预设 */}
-          <div className="settings-modal-section rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4" data-testid="settings-provider-presets">
+          <details className="settings-modal-section rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4" data-testid="settings-provider-presets">
+            <summary className="flex cursor-pointer list-none flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span>
+                <span className="flex items-center gap-2 text-sm font-medium text-purple-200"><Zap className="h-4 w-4" /> 端点模板（可选）</span>
+                <span className="mt-1 block text-xs text-slate-500">只是少打接口地址，不是模型清单；点击不会覆盖你手填或读取到的模型 ID。</span>
+              </span>
+              <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-500">展开模板</span>
+            </summary>
+            <div className="mt-3">
             <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <div className="flex items-center gap-2 text-sm font-medium text-purple-200"><Zap className="h-4 w-4" /> 接口预设</div>
-                <p className="mt-1 text-xs text-slate-500">点选后自动填端点和模型 ID，密钥仍由你自己填写；所有字段都可以再手动改。</p>
+                <div className="flex items-center gap-2 text-sm font-medium text-purple-200"><Zap className="h-4 w-4" /> 端点模板（可选）</div>
+                <p className="mt-1 text-xs text-slate-500">模板只帮你少打接口地址，不代表模型最新版；点选后模型 ID 保持不变，请手填或用账号 `/models` 读取。</p>
               </div>
               <div className="relative w-full lg:w-80">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
@@ -503,7 +875,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-medium text-white">{preset.label}</div>
-                        <div className="mt-1 truncate text-xs text-slate-400">{preset.modelId}</div>
+                        <div className="mt-1 truncate text-xs text-slate-400">只填端点模板，模型从账号读取</div>
                       </div>
                       <span className="shrink-0 rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">{providerGroupLabel[group]}</span>
                     </div>
@@ -514,11 +886,12 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
               })}
               {filteredPresets.length === 0 && (
                 <div className="col-span-full rounded-2xl border border-dashed border-slate-700 px-4 py-8 text-center text-sm text-slate-500">
-                  没有匹配的预设。可以直接在下面填写任意 OpenAI 兼容 / 本地端点。
+                  没有匹配的模板。直接在最上方填写任意 OpenAI 兼容 / 本地服务端点即可。
                 </div>
               )}
             </div>
-          </div>
+            </div>
+          </details>
 
           <div className="settings-modal-section rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4" data-testid="settings-provider-profiles">
             <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -572,44 +945,29 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
           </div>
 
           <div className="settings-modal-section grid gap-5 rounded-2xl border border-slate-800 bg-slate-950/35 p-4 md:grid-cols-2" data-testid="settings-provider-manual-form">
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">服务商类型</label>
-              <select
-                value={effectiveProvider}
-                onChange={(e) => setField("provider", e.target.value as ProviderId)}
-                className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-purple-500"
-              >
-                {(Object.keys(PROVIDER_LABELS) as ProviderId[]).map((id) => (
-                  <option key={id} value={id}>{PROVIDER_LABELS[id]}</option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-slate-500">不同服务商的协议不同；这里只选择类型，具体路径会按接口规则补全。</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-300">显示名称</label>
-              <input value={form.modelName} onChange={(e) => setField("modelName", e.target.value)} placeholder="例：DeepSeek Chat" className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-purple-500" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-300">模型 ID *</label>
-              <input value={form.modelId} onChange={(e) => setField("modelId", e.target.value)} placeholder={effectiveProvider === "anthropic" ? "claude-sonnet-4-6" : effectiveProvider === "gemini" ? "gemini-2.0-flash" : "deepseek-chat / gpt-4o / qwen2.5:14b"} className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-purple-500" />
-            </div>
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">端点 URL *</label>
-              <input value={form.apiUrl} onChange={(e) => setField("apiUrl", e.target.value)} placeholder={effectiveProvider === "anthropic" ? "https://api.anthropic.com/v1" : effectiveProvider === "gemini" ? "https://generativelanguage.googleapis.com/v1beta" : effectiveProvider === "ollama" ? "http://localhost:11434" : "https://api.deepseek.com/v1"} className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-white outline-none focus:border-purple-500" />
-              <p className="mt-1 text-xs text-slate-500">OpenAI 兼容只需填到 /v1；其它服务商也只填基础地址，路径会自动补全。</p>
-            </div>
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-300">接口密钥 {!keyOptional && "*"}{keyOptional && <span className="ml-2 text-xs text-slate-500">(本地端点可留空)</span>}</label>
-              <div className="relative">
-                <input type={showKey ? "text" : "password"} value={form.apiKey} onChange={(e) => setField("apiKey", e.target.value)} placeholder={effectiveProvider === "anthropic" ? "sk-ant-..." : "sk-..."} className="w-full rounded-2xl border border-slate-700 bg-slate-800 px-4 py-3 pr-12 text-sm text-white outline-none focus:border-purple-500" />
-                <button onClick={() => setShowKey((v) => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+            <div className="md:col-span-2 rounded-2xl border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-400">
+              <div className="mb-2 text-sm font-medium text-slate-200">当前配置预览</div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="min-w-0">
+                  <span className="text-slate-500">接口</span>
+                  <div className="mt-1 truncate text-slate-200">{form.apiUrl ? formatPresetHost(form.apiUrl) : "未填写"}</div>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-slate-500">模型</span>
+                  <div className="mt-1 truncate font-mono text-slate-200">{form.modelId || "未填写"}</div>
+                </div>
+                <div className="min-w-0">
+                  <span className="text-slate-500">密钥</span>
+                  <div className={form.apiKey || keyOptional ? "mt-1 text-emerald-300" : "mt-1 text-amber-300"}>{form.apiKey ? "已填写" : keyOptional ? "可留空" : "必填"}</div>
+                </div>
               </div>
+              <p className="mt-2 text-[11px] text-slate-500">要修改接口、key 或模型 ID，请使用最上方“自定义 API”区域；这里保留模型发现和高级生成参数。</p>
             </div>
             <div className="settings-modal-section md:col-span-2 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4" data-testid="settings-model-discovery">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="flex items-center gap-2 text-sm font-medium text-cyan-200"><ListChecks className="h-4 w-4" /> 模型发现</div>
-                  <p className="mt-1 text-xs text-slate-500">按当前接口地址和密钥读取 `/models`，只获取模型名称，不调用模型生成。</p>
+                  <p className="mt-1 text-xs text-slate-500">按当前接口地址和密钥读取 `/models`，用账号真实可用列表覆盖旧预设；只获取模型名称，不调用模型生成。</p>
                 </div>
                 <button
                   type="button"
@@ -618,7 +976,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                   className="inline-flex items-center justify-center gap-2 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-medium text-cyan-100 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {modelDiscoveryStatus === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}
-                  获取模型列表
+                  用当前密钥获取模型列表
                 </button>
               </div>
               <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
@@ -690,6 +1048,11 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                           <span className="truncate">{model.ownedBy} · {model.type}</span>
                           {active && <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />}
                         </div>
+                        {active && (
+                          <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-100" data-testid="settings-discovered-model-draft-status">
+                            草稿已选，保存 API 配置后首页生效
+                          </div>
+                        )}
                         {model.tags.length > 0 && (
                           <div className="mt-2 flex flex-wrap gap-1">
                             {model.tags.slice(0, 4).map((tag) => (
@@ -701,10 +1064,10 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
                         )}
                         <div className="mt-3 flex gap-2">
                           <button type="button" onClick={() => useDiscoveredModel(model)} className="rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-cyan-100 hover:border-cyan-500/40 hover:bg-cyan-500/10">
-                            填入
+                            填入草稿
                           </button>
                           <button type="button" onClick={() => useDiscoveredModel(model, true)} className="rounded-xl border border-slate-700 px-2.5 py-1.5 text-[11px] text-emerald-100 hover:border-emerald-500/40 hover:bg-emerald-500/10">
-                            保存档案
+                            存为常用
                           </button>
                         </div>
                       </div>
@@ -787,7 +1150,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
           <button onClick={() => setForm((prev) => ({ ...prev, apiUrl: "", apiKey: "", modelId: "", modelName: "", provider: undefined, temperature: 0.85, maxTokens: undefined, activeProfileId: undefined }))} className="text-sm text-red-400">重置当前配置</button>
           <div className="flex gap-3">
             <button onClick={onClose} className="rounded-2xl px-5 py-2.5 text-sm text-slate-400 hover:bg-slate-800">取消</button>
-            <button onClick={() => { onSave({ ...form, provider: effectiveProvider }); onClose(); }} className="rounded-2xl bg-purple-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-500">保存设置</button>
+            <button data-testid="settings-save-button" onClick={saveAndClose} className="rounded-2xl bg-purple-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-500">保存 API 配置并用于聊天</button>
           </div>
         </div>
       </div>

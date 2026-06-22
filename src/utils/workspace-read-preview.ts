@@ -112,6 +112,7 @@ export function buildWorkspaceReadPreviewAttachment(
         `路径：${sourcePath}`,
         `读取目标：${targetPath}`,
         `正文片段：${formatPreviewNumber(content.length)} 字符，已截取前 ${formatPreviewNumber(previewText.length)} 字符进入线程上下文。`,
+        "预览边界：完整正文未持久保存；如需更多内容必须再次通过 Gateway read_file 读取。",
         "",
         "```text",
         previewText,

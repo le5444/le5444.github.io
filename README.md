@@ -4,7 +4,7 @@
 
 [在线体验](https://le5444.github.io/) · [源码分支](https://github.com/le5444/le5444.github.io/tree/source) · [路线图](docs/项目路线图.md)
 
-![织梦写作台界面](docs/zhimeng-workbench-20260615.png)
+![织梦写作台界面](docs/zhimeng-workbench-20260622.png)
 
 ## 一句话
 
@@ -14,17 +14,20 @@
 
 ## 当前能力
 
+- **Chat-first Agent Home**：默认首页收束为左侧线程 / 项目列表、中间 AI 对话、右侧窄工具栏；模型未配置时首页直接给出“配置模型”入口。
+- **左侧线程 / 项目导航**：支持项目对话、自由对话、搜索、置顶、重命名、删除和归档，保持类似 Codex / VS Code 的轻量侧栏。
+- **AI 对话与附件回执**：支持文本、文件、图片和多模态请求；附件会显示是否进入模型请求、是否仅元数据、是否被拒绝。
+- **模型 Provider 配置**：支持 OpenAI-compatible baseURL、API key、模型 ID、模型测试、桌面 Provider 配置导入和本地 mock Provider 冒烟。
+- **Agent Runtime / Tool Trace**：模型可产生 `<bridge-request>` 工具请求；只读工具、文件读取、工作区扫描、写文件 Diff、命令审批、运行回放和报告都有脚本验收。
+- **文件 / Diff / 审批工作流**：AI 写文件先形成 Diff 草案和审批记录；审批后可续跑，结果进入线程和运行轨迹。
 - **小说写作工作区**：管理作品、章节、正文、设定资料、分类、版本历史和写作统计。
 - **小说 Skills 库**：内置中文网文、人物、剧情、世界观、写作、修订和蒸馏相关 Skill，并支持自定义 Skill。
 - **反崩盘系统**：围绕人物声音、连续性、伏笔、约束卡、成长弧线和 AI 痕迹做检查。
 - **蒸馏与对标**：从参考文本中提取节奏、场景功能、叙事机制和可复用技法，避免只停留在泛泛提示词。
-- **Agent 线程**：把任务、上下文附件、Worker 结果、审批 ID、Diff 和消息流沉淀到可恢复的本地线程。
-- **多工作区管理器**：支持工作区搜索、领域过滤、最近打开、跨工作区定位、线程空间和工作区检查器。
+- **Agent 线程与多工作区**：把任务、上下文附件、Worker 结果、审批 ID、Diff 和消息流沉淀到可恢复的本地线程；支持工作区搜索、领域过滤、最近打开和跨工作区定位。
 - **上下文包 context_pack**：把当前任务、工作区摘要、最近文件、线程附件、记忆和 Skills 压成可审查上下文。
-- **模型配置**：管理 OpenAI-compatible 等模型接口、配置档案、模型列表和测试结果。
-- **任务 / Diff / 审批**：AI 生成的文件修改先形成草案和 Diff；写文件、记忆修改、模型探针等动作进入审批队列。
 - **本地 Bridge / Gateway**：Python Bridge 提供健康检查、context_pack、memory、approval、provider、worker、MCP-like facade 等受控能力。
-- **Memory Manager**：管理 L1/L2 记忆、证据、标签、冻结、软删除、备份和恢复草案。
+- **记忆 / Skills / 指令栈入模**：Runbook、Memory、Skills、Instruction Stack 可以作为受控上下文进入 Agent 线程。
 - **PWA 部署**：线上版本可作为静态 PWA 打开和安装；完整本地 Agent 能力需要启动 Bridge。
 
 ## 工作台结构
@@ -68,10 +71,15 @@ npm run dev
 npm run build
 ```
 
-验证 Phase 1 核心链路：
+常用验证命令：
 
 ```bash
+npm run verify:core-chain
 npm run verify:phase1
+npm run verify:phase2
+npm run verify:phase3
+npm run verify:phase4
+npm run verify:phase5
 ```
 
 构建 GitHub Pages 版本：
@@ -109,7 +117,8 @@ src/                  React 应用源码
 src/anti-collapse/    小说反崩盘与连续性检查
 src/components/       写作台、Agent 控制台、编辑器和管理器组件
 src/store/            本地数据、设置、历史、工作区和 Provider 状态
-src/utils/            Agent 计划、技能路由、Bridge 协议、上下文和工具层
+src/utils/            Agent 对话、附件、线程、运行回放、Bridge 协议和工具层
+scripts/              Phase 1-5、浏览器、Provider、Gateway 和 Agent Runtime 验收脚本
 skills/               小说创作 Skill 库
 bridge/               本地 Agent Gateway、健康检查、MCP-like facade
 desktop/              桌面版启动器和打包配置
@@ -143,13 +152,13 @@ https://github.com/le5444/le5444.github.io/tree/source
 
 ## 当前状态
 
-项目仍在快速迭代中。现在优先把入口收清楚：打开项目时先看到 **织梦写作台 / Zhimeng Writing Agent**，核心体验围绕 AI 对话、写作项目、文件上下文、模型配置和审批流程展开。
+项目仍在快速迭代中。现在优先把入口收清楚：打开项目时先看到 **织梦写作台 / Zhimeng Writing Agent**，核心体验围绕 AI 对话、项目线程、附件 / 图片、文件上下文、模型配置、工具执行和审批流程展开。
 
-- AI 对话首屏工作台已替代旧书架首页。
-- Agent 线程、消息流、上下文附件和审批关联已落地。
-- Multi Workspace Manager、工作区 context_pack、权限 profile、工作区 Skills 集已落地。
-- Provider 配置草案、模型列表探针、Worker 载荷和审批执行门已落地。
-- Specs / Steering / Hooks 协议管理器、Changes / Diff、底部运行面板已进入首版。
-- 运行事件流、增量游标和 SSE 长连接观察已落地，用于只读串联 Gateway、Worker、审批和前端 runtime log。
+- 默认首页已经从旧书架首页收束为 Chat-first Agent Home。
+- 左侧线程 / 项目列表、空状态、输入框、右侧窄工具栏和运行状态栏已经做过多轮 Codex-like 收敛。
+- 附件 / 图片进入模型请求、超大附件拒绝、仅元数据附件、浏览器真实上传冒烟均有验收。
+- Provider 配置、桌面 Provider 导入、mock OpenAI-compatible 服务、鉴权失败边界和空回复守门均有脚本覆盖。
+- Phase 1-5 已有聚合门禁；`verify:phase5` 会先跑核心链路四问校准，再守住运行层和桌面 / Provider readiness。
+- 当前仍不是完整复刻 Codex / Claude Code 的成熟产品，下一步重点是继续打磨消息流、工具轨迹、多文件 Diff、审批续跑和真实桌面体验。
 
-更完整的阶段规划见 [docs/Personal-OS-Roadmap.md](docs/Personal-OS-Roadmap.md)。
+更完整的阶段规划见 [docs/项目路线图.md](docs/项目路线图.md)、[docs/core-chain-calibration-20260620.md](docs/core-chain-calibration-20260620.md) 和 [docs/phase0-current-state-audit-20260622.md](docs/phase0-current-state-audit-20260622.md)。

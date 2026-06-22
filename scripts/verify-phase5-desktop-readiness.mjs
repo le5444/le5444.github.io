@@ -114,6 +114,9 @@ const apiProviders = readProjectFile("src/store/api-providers.ts");
 const providerImport = readProjectFile("src/utils/provider-config-import.ts");
 const executorBridge = readProjectFile("src/utils/executor-bridge.ts");
 const gateway = readProjectFile("bridge/zhimeng_bridge.py");
+const phase3Aggregate = readProjectFile("scripts/verify-phase3.mjs");
+const phase4Aggregate = readProjectFile("scripts/verify-phase4.mjs");
+const phase5Aggregate = readProjectFile("scripts/verify-phase5.mjs");
 
 for (const phrase of [
   "核心链路是什么",
@@ -125,11 +128,24 @@ for (const phrase of [
   "provider_probe",
   "provider_config_status",
   "allow_remote_model",
+  "前置阶段防回退",
+  "Phase 5 总门禁必须先跑四问 core-chain",
+  "Phase 4 必须先跑 Phase 3",
+  "Phase 3 必须先跑 Phase 2 Agent Home",
+  "Phase 3 会先跑 Phase 2 Agent Home 总闸门",
   "npm run verify:phase5-desktop-readiness",
   "npm run verify:phase5",
 ]) {
   assert(doc.includes(phrase), `Phase 5 acceptance doc missing: ${phrase}`);
 }
+
+assert(phase5Aggregate.includes("verify-core-chain-calibration.mjs"), "Phase 5 aggregate must run core-chain calibration first");
+assert(phase5Aggregate.includes("verify-phase4.mjs"), "Phase 5 aggregate must run Phase 4 aggregate before desktop readiness");
+assert(phase5Aggregate.includes("verify-phase5-desktop-readiness.mjs"), "Phase 5 aggregate must run desktop/provider readiness");
+assert(phase4Aggregate.includes("verify-phase3.mjs"), "Phase 4 aggregate must run Phase 3 aggregate first");
+assert(phase4Aggregate.includes("verify-phase4-agent-runtime.mjs"), "Phase 4 aggregate must run Agent Runtime readiness");
+assert(phase3Aggregate.includes("verify-phase2.mjs"), "Phase 3 aggregate must run Phase 2 Agent Home gate first");
+assert(phase3Aggregate.includes("verify-phase3-project-mode.mjs"), "Phase 3 aggregate must run project-mode toolchain");
 
 for (const script of [
   "build",
@@ -174,7 +190,13 @@ assert(providerSwitch.includes("resolve_provider_config"), "Provider switch tool
 assert(providerSwitch.includes("[present:redacted]"), "Provider switch tool should redact keys in normal output");
 assert(providerSwitch.includes("apply"), "Provider switch tool should support apply command");
 assert(providerSwitch.includes("export-env"), "Provider switch tool should support env export");
+assert(providerSwitch.includes("chat-smoke"), "Provider switch tool should support chat smoke command");
+assert(providerSwitch.includes("run_model_worker_task"), "Provider switch chat smoke should reuse Gateway model worker path");
 assert(providerSwitchCmd.includes("zhimeng_provider_switch.py status"), "Provider switch cmd should expose status");
+assert(providerSwitchCmd.includes("zhimeng_provider_switch.py chat-smoke"), "Provider switch cmd should expose chat-smoke");
+assert(providerSwitchCmd.includes("chat-smoke --allow-remote"), "Provider switch cmd should show remote chat-smoke gate");
+assert(providerSwitchCmd.includes("export-env --shell powershell"), "Provider switch cmd should expose env export");
+assert(providerSwitchCmd.includes("输出会打码 API key"), "Provider switch cmd should explain key redaction");
 
 assert(modals.includes("settings-modal-overlay"), "Settings modal should stay a lightweight overlay");
 assert(modals.includes("settings-modal-panel"), "Settings modal should stay a lightweight panel");

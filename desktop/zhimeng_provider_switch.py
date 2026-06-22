@@ -314,6 +314,49 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_chat_smoke(args: argparse.Namespace) -> int:
+    profile = build_probe_profile(args)
+    bridge = import_bridge()
+    prompt = (args.prompt or "请用一句中文回复：织梦 Provider 配置可用。").strip()
+    payload = {
+        "provider": profile.get("provider"),
+        "api_url": profile.get("apiUrl"),
+        "model_id": profile.get("modelId"),
+        "api_key": args.api_key if args.api_key is not None else profile.get("apiKey", ""),
+        "api_key_env": args.api_key_env or profile.get("apiKeyEnv") or provider_key_env(str(profile.get("provider") or "")),
+        "execute_model": True,
+        "allow_remote_model": bool(args.allow_remote),
+        "stream_model": bool(args.stream),
+        "timeout_seconds": args.timeout_seconds,
+        "max_tokens": args.max_tokens or 240,
+        "temperature": args.temperature if args.temperature is not None else 0.2,
+        "domain": "general",
+        "purpose": "Provider switch chat smoke",
+        "system_prompt": "你是织梦写作台 Provider 配置冒烟助手。只回答连接测试结果。",
+        "task": prompt,
+    }
+    result = bridge.run_model_worker_task(payload)
+    output = str(result.get("output") or "")
+    print(json.dumps({
+        "status": result.get("status"),
+        "reason": result.get("reason"),
+        "output": output[:1200],
+        "outputChars": result.get("output_chars", len(output)),
+        "config": {
+            "provider": profile.get("provider"),
+            "apiUrl": profile.get("apiUrl"),
+            "modelId": profile.get("modelId"),
+            "apiKey": redacted(str(payload.get("api_key") or "")),
+            "apiKeyEnv": payload.get("api_key_env"),
+            "remoteAllowed": bool(args.allow_remote),
+            "stream": bool(args.stream),
+        },
+        "preparedTask": result.get("prepared_task"),
+        "message": "聊天冒烟完成。" if result.get("status") == "ok" else "聊天冒烟未执行或失败；查看 status/reason。",
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def add_apply_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", help="override provider config path")
     parser.add_argument("--preset", help="preset id from Gateway provider_catalog")
@@ -349,6 +392,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p_probe.add_argument("--allow-remote", action="store_true", help="allow remote provider model-list probe")
     p_probe.add_argument("--timeout-seconds", type=int, default=8)
 
+    p_chat = sub.add_parser("chat-smoke", help="send one minimal chat request with the active Provider profile")
+    add_apply_args(p_chat)
+    p_chat.add_argument("--prompt", default="请用一句中文回复：织梦 Provider 配置可用。")
+    p_chat.add_argument("--allow-remote", action="store_true", help="allow remote provider chat smoke")
+    p_chat.add_argument("--stream", action="store_true", help="use streaming mode when supported")
+    p_chat.add_argument("--timeout-seconds", type=int, default=12)
+
     p_export = sub.add_parser("export-env", help="print env command for active profile key")
     p_export.add_argument("--config", help="override provider config path")
     p_export.add_argument("--shell", choices=["powershell", "cmd"], default="powershell")
@@ -366,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_apply(args)
         if args.command == "probe":
             return cmd_probe(args)
+        if args.command == "chat-smoke":
+            return cmd_chat_smoke(args)
         if args.command == "export-env":
             return cmd_export_env(args)
         raise RuntimeError(f"Unsupported command: {args.command}")

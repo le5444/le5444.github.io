@@ -237,9 +237,11 @@ assert(requestDisplaySummary.includes("1. read_file"), "request display first ac
 assert(requestDisplaySummary.includes("目的：读取 README"), "request display sanitized purpose");
 assert(requestDisplaySummary.includes("审批：不需要"), "request display no approval");
 assert(requestDisplaySummary.includes("校验：通过"), "request display validation pass");
+assert(requestDisplaySummary.includes("下一步：交给 Gateway 执行，并把结果回灌到当前对话。"), "request display explains direct Gateway next step");
 assert(requestDisplaySummary.includes("2. run_command"), "request display second action");
 assert(requestDisplaySummary.includes("审批：需要"), "request display approval required");
 assert(requestDisplaySummary.includes("校验：1 阻断 / 1 警告"), "request display validation counts");
+assert(requestDisplaySummary.includes("下一步：先处理阻断校验，本次不应直接执行。"), "request display explains blocked validation next step");
 const requestForTrace = {
   id: "exec-1",
   action: "run_command",
@@ -316,13 +318,13 @@ const toolResultSummary = buildAgentBridgeToolResultSummary([
     action: "read_file",
     status: "ok",
     detail: "读取完成",
-    result: { run_id: "run-1" },
+    result: { request_id: "req-read-1", run_id: "run-1" },
   },
   {
     action: "write_file",
     status: "approval_required",
     detail: "x".repeat(500),
-    result: { approvalId: "approval-abcdef123456" },
+    result: { requestId: "req-write-1", approvalId: "approval-abcdef123456" },
   },
 ], {
   statusLabel: (status) => status === "approval_required" ? "需审批" : status,
@@ -330,11 +332,31 @@ const toolResultSummary = buildAgentBridgeToolResultSummary([
 });
 assert(toolResultSummary.includes("1. read_file"), "tool result summary first action");
 assert(toolResultSummary.includes("状态：ok"), "tool result summary raw ok status");
+assert(toolResultSummary.includes("请求：req-read-1"), "tool result summary first request id");
 assert(toolResultSummary.includes("运行：run-1"), "tool result summary run id");
+assert(toolResultSummary.includes("下一步：结果已回灌，模型可以基于证据继续推理。"), "tool result summary explains completed next step");
 assert(toolResultSummary.includes("2. write_file"), "tool result summary second action");
 assert(toolResultSummary.includes("状态：需审批"), "tool result summary injected status label");
+assert(toolResultSummary.includes("请求：req-write-1"), "tool result summary second request id");
 assert(toolResultSummary.includes("审批：approval-abc"), "tool result summary compact approval");
+assert(toolResultSummary.includes("下一步：到审批面板确认、拒绝或等待人工处理。"), "tool result summary explains approval next step");
 assert(!toolResultSummary.includes("x".repeat(430)), "tool result summary detail is capped");
+const diffAndErrorToolResultSummary = buildAgentBridgeToolResultSummary([
+  {
+    action: "write_file",
+    status: "diff_draft",
+    detail: "已转为 Diff 草案。",
+    result: { request_id: "req-diff-1" },
+  },
+  {
+    action: "web_fetch",
+    status: "error",
+    detail: "网络失败。",
+    result: { request_id: "req-web-1" },
+  },
+]);
+assert(diffAndErrorToolResultSummary.includes("下一步：到变更 / Diff 面板逐项审查 hunk。"), "tool result summary explains diff review next step");
+assert(diffAndErrorToolResultSummary.includes("下一步：检查错误原因，调整请求或配置后重试。"), "tool result summary explains error next step");
 const historyUser = agentThreadMessageToChatHistory({
   role: "user",
   content: "上一轮问题",

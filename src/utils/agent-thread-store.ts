@@ -51,6 +51,7 @@ export interface AgentThreadTraceRow {
   source: string;
   ref?: string;
   meta?: string[];
+  nextStep?: string;
 }
 
 export interface AgentThreadRunbookStep {

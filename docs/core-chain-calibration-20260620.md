@@ -16,6 +16,18 @@
 - 写作是重要内置能力，但不是整个产品边界。
 - 后续参考资料、文档和本地可借鉴源码只能提炼架构、交互、链路和验收标准；落地代码必须按当前项目结构重写。
 
+### 0.1 参考资料吸收边界
+
+本轮校准已经把老大给的资料纳入判断，但它们进入项目的方式必须是“转成链路和验收”，不是“照搬页面或静态模型清单”：
+
+- `继续上下文-织梦PersonalOS.md`、`对话记忆-织梦PersonalOS.md`：只继承 Agent IDE、三栏工作台、Gateway / Memory / Skills / Worker / Provider / 审批这些架构经验；旧的 `LumenOS-first` 公开命名边界不再继承。
+- `AI编程Agent工具全景与复刻指南.docx`：吸收桌面端、CLI、VS Code 插件、MCP、工具执行层、权限审批层、模型适配层和会话管理层的拆解，落到本项目就是线程、工具、审批、Provider、Gateway 和运行报告。
+- `Codex_5.5_UI复刻完整指南 (3).docx`：吸收三栏布局、会话列表、聊天窗口、文件树、终端、Diff、权限弹窗、设置面板、状态栏和模型注册表这些 UI / 架构目标；其中出现的未来模型名或版本号只当示例，不进入本项目 Provider 预设的真实模型清单，真实可用模型必须来自 `/models`。
+- `C:\Users\30865\Desktop\ai可借鉴源码`：吸收 Agent Harness 的 query loop、tool pool、permission gate、context pipeline、subagent、skills、hooks、MCP、provider proxy 等结构，不把外部源码机械移植到本仓库。
+- `frontend(1).zip`：吸收 cc switch / 配置工具思路，落地为“粘贴配置解析、模型发现、保存启用、桌面 Provider 配置工具”，不把 API 配置塞回默认右侧栏或全屏页面。
+
+这些资料的共同结论是：默认首页必须继续围绕 `线程 / 中间 AI 对话 / 右侧上下文与审批`，每个新功能都要回答它接在核心链路哪一段、怎么验证、是否优先复用 Provider API 或 Gateway。
+
 ## 1. 核心链路是什么
 
 当前项目的最短可用 Agent 链路必须是：
@@ -47,9 +59,10 @@
 | 公开边界 | 入口仍是 Zhimeng-first，不回到 LumenOS-first | `npm run verify:phase5` |
 | 默认首页 | Chat-first 三栏，右侧默认不被 API 配置占用 | `npm run verify:phase2`、`npm run verify:phase2-agent-home-browser` |
 | 普通对话 | 文本进入真实 Provider API，请求失败不生成假回复 | `npm run verify:phase1`、手动发送文本 |
-| 附件 / 图片 | 文件片段和 image part 进入模型请求，超大附件发送前拒绝 | `npm run verify:agent-attachment`、`npm run verify:agent-chat-attachment-api-smoke` |
-| 线程保存 | 用户消息、AI 回复、上下文、审批和运行事件可恢复 | `npm run verify:agent-thread-store` |
-| 项目模式 | 绑定目录、扫描、读文件、挂上下文、Diff、审批形成闭环 | `npm run verify:phase3` |
+| 模型配置入口 | 首页模型胶囊能打开轻量设置；自定义 baseURL / API key / modelId 可点“保存 API 配置”立即驱动对话；复制进去的 baseURL / API key 必须保存为去空格的干净值；模型发现必须先“填入草稿”，并显示当前首页正在使用的 Provider 状态；端点模板默认折叠且标明不是模型清单 | `npm run verify:phase1-browser-chat`、`npm run verify:provider-config`、`npm run verify:phase2-agent-home-browser` |
+| 附件 / 图片 | 文件片段和 image part 进入模型请求，真实首页发送后 mock Provider 能记录文本附件、image_url 和图片 data URL，超大附件发送前拒绝 | `npm run verify:agent-attachment`、`npm run verify:agent-chat-attachment-api-smoke`、`npm run verify:phase2-agent-home-browser` |
+| 线程保存 | 用户消息、AI 回复、附件、上下文、审批和运行事件可恢复；自由对话落在 unbound 线程空间，刷新后仍可见 | `npm run verify:agent-thread-store`、`npm run verify:phase2-agent-home-browser` |
+| 项目模式 | 绑定目录、扫描、读文件、挂上下文、Diff、审批形成闭环；项目工具证据进入 Tool Trace / 运行报告时必须能追到 `read_file` 路径、`workspace_scan` 扫描根和文件数 | `npm run verify:phase3` |
 | 写文件 | 模型不能直写磁盘，必须先生成 Diff / 审批 | `npm run verify:write-file-diff`、`npm run verify:agent-loop-write-file` |
 | 命令执行 | 不开放任意 shell，命令走 Gateway allowlist / 审批 | `npm run verify:gateway-command-approval` |
 | Agent Loop | 不停在一次 sendChat，能工具请求、回灌和续跑 | `npm run verify:phase4` |
@@ -61,6 +74,7 @@
 能，而且应该优先用 API，但要分清职责：
 
 - AI 对话、模型列表、模型测试、多模态输入优先走 Provider API。
+- 首页自定义 API 配置必须能在轻量设置里完成：填 baseURL、API key、modelId 后点“保存并使用”，下一条对话直接走该 Provider。
 - 文件、命令、目录扫描、Diff、审批、Worker、Memory、Skills、MCP、Scheduler 走 Gateway / bridge contract。
 - Gateway 离线不能阻塞基础聊天；Provider 不可用也不能阻塞线程保存。
 - 远程模型探测、Skill runtime、MCP、Scheduler、写文件和命令执行都必须保留执行门和审批门。

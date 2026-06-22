@@ -71,6 +71,7 @@ const server = http.createServer(async (req, res) => {
       object: "list",
       data: [
         { id: "smoke-model", object: "model", owned_by: "zhimeng-smoke" },
+        { id: "auth-fail-model", object: "model", owned_by: "zhimeng-smoke" },
       ],
     }));
     return;
@@ -83,6 +84,17 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && req.url === "/v1/chat/completions") {
     const body = await readJson(req);
     lastChatRequest = summarizeChatRequest(body, req);
+    if (body.model === "auth-fail-model") {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        error: {
+          code: "invalid_api_key",
+          message: "mock auth failure for browser recovery test",
+          type: "authentication_error",
+        },
+      }));
+      return;
+    }
     if (body.stream === false) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
