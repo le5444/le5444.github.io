@@ -77,8 +77,8 @@ function candidateBrowsers() {
     const programFiles = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA].filter(Boolean);
     return [
       ...env,
-      ...programFiles.map((root) => join(root, "Microsoft", "Edge", "Application", "msedge.exe")),
       ...programFiles.map((root) => join(root, "Google", "Chrome", "Application", "chrome.exe")),
+      ...programFiles.map((root) => join(root, "Microsoft", "Edge", "Application", "msedge.exe")),
     ];
   }
   if (process.platform === "darwin") {
@@ -364,7 +364,11 @@ try {
   let browserStderr = "";
   browserProcess.stderr?.on("data", (chunk) => { browserStderr += String(chunk); });
   browserProcess.stdout?.resume();
-  const version = await waitForJson(`http://127.0.0.1:${debugPort}/json/version`);
+  const version = await waitForJson(`http://127.0.0.1:${debugPort}/json/version`, 60000).catch((error) => {
+    const stderr = browserStderr.trim();
+    const exitCode = browserProcess?.exitCode;
+    throw new Error(`DevTools endpoint did not become ready: ${error instanceof Error ? error.message : String(error)}; browserExit=${exitCode ?? "running"}; browserStderr=${stderr.slice(-2000) || "[empty]"}`);
+  });
   assert(version.webSocketDebuggerUrl, "DevTools browser websocket URL missing");
   const pageTarget = await (async () => {
     const startedAt = Date.now();
@@ -379,7 +383,8 @@ try {
   devtools = await connectWebSocket(pageTarget.webSocketDebuggerUrl);
   await devtools.send("Runtime.enable");
   await devtools.send("Page.enable");
-  await delay(800);
+  await devtools.send("Page.navigate", { url });
+  await delay(1200);
   const readyResult = await evaluateWithRetry(devtools, {
     awaitPromise: true,
     returnByValue: true,
@@ -396,6 +401,9 @@ try {
             const modelPill = document.querySelector('[data-testid="composer-model-pill"]');
             const emptyModelLink = document.querySelector('[data-testid="agent-home-empty-model-link"]');
             const starterModelButton = document.querySelector('[data-testid="agent-home-starter-config-model"]');
+            const starter = document.querySelector('.codex-chat-empty');
+            const messageList = document.querySelector('.codex-message-list');
+            const composerCard = document.querySelector('.codex-composer-card');
             const rectOf = (element) => {
               const rect = element.getBoundingClientRect();
               return {
@@ -409,7 +417,9 @@ try {
               ok: true,
               title: document.title,
               sideState: side.getAttribute('data-panel-state'),
+              sideText: side.innerText.replace(/\\s+/g, " ").trim(),
               html: document.documentElement.outerHTML,
+              bodyText: document.body.innerText.replace(/\\s+/g, " ").trim(),
               modelPillText: modelPill?.innerText.replace(/\\s+/g, " ").trim() || "",
               modelPillTitle: modelPill?.getAttribute("title") || "",
               emptyModelLinkText: emptyModelLink?.innerText.replace(/\\s+/g, " ").trim() || "",
@@ -423,6 +433,9 @@ try {
                 main: rectOf(main),
                 side: rectOf(side),
                 composer: rectOf(composer),
+                composerCard: composerCard ? rectOf(composerCard) : null,
+                starter: starter ? rectOf(starter) : null,
+                messageList: messageList ? rectOf(messageList) : null,
               },
             });
             return;
@@ -441,11 +454,16 @@ try {
   assert(readyValue.ok, `Agent Home did not render in browser: ${JSON.stringify(readyValue).slice(0, 2000)}`);
   const layout = readyValue.layout || {};
   assert(layout.left?.width >= 220 && layout.left?.width <= 280, `left rail width drifted: ${JSON.stringify(layout.left)}`);
-  assert(layout.side?.width >= 40 && layout.side?.width <= 70, `collapsed right rail width drifted: ${JSON.stringify(layout.side)}`);
+  assert(layout.side?.width >= 52 && layout.side?.width <= 74, `collapsed right rail width drifted: ${JSON.stringify(layout.side)}`);
   assert(layout.main?.width > 760, `main chat area is too narrow: ${JSON.stringify(layout.main)}`);
   assert(layout.main?.width > (layout.left?.width || 0) * 2, `main chat area must remain the primary surface: ${JSON.stringify(layout)}`);
   assert(layout.composer?.width >= 720, `composer is too narrow for a chat-first home: ${JSON.stringify(layout.composer)}`);
   assert(layout.composer?.x > layout.left?.width, `composer should be in the main panel, not the left rail: ${JSON.stringify(layout)}`);
+  assert(layout.starter?.height > 100, `empty starter should be visible above the composer: ${JSON.stringify(layout)}`);
+  assert(layout.composerCard?.y > layout.starter?.y, `composer should stay below the starter: ${JSON.stringify(layout)}`);
+  const starterComposerGap = (layout.composerCard?.y || layout.composer?.y || 0) - ((layout.starter?.y || 0) + (layout.starter?.height || 0));
+  assert(starterComposerGap >= 0 && starterComposerGap <= 42, `empty starter should stay visually attached to composer, gap=${starterComposerGap}: ${JSON.stringify(layout)}`);
+  assert(layout.messageList?.height > layout.starter?.height, `empty starter should sit inside the message surface, not replace it: ${JSON.stringify(layout)}`);
   const initialModelText = `${readyValue.modelPillText || ""}\n${readyValue.emptyModelLinkText || ""}`;
   const initialModelTitle = `${readyValue.modelPillTitle || ""}\n${readyValue.emptyModelLinkTitle || ""}`;
   if (initialModelText.includes("LM Studio Local") || initialModelText.includes("local-model")) {
@@ -453,6 +471,78 @@ try {
     assert(initialModelTitle.includes("不代表本地模型服务已启动"), `offline local model title should explain service is not started: ${JSON.stringify({ initialModelText, initialModelTitle })}`);
   }
   const dom = String(readyValue.html || "");
+  const initialBodyText = String(readyValue.bodyText || "");
+  assert(initialBodyText.includes("对话模式"), `default Agent Home should use 对话模式 wording: ${JSON.stringify({ bodyText: initialBodyText }).slice(0, 2000)}`);
+  assert(initialBodyText.includes("全部") && initialBodyText.includes("置顶") && initialBodyText.includes("项目") && initialBodyText.includes("对话"), `left filter should expose concise chat/project filters: ${JSON.stringify({ bodyText: initialBodyText }).slice(0, 2000)}`);
+  assert(!initialBodyText.includes("自由模式"), `default Agent Home should not expose old 自由模式 wording: ${JSON.stringify({ bodyText: initialBodyText }).slice(0, 2000)}`);
+  assert(!initialBodyText.includes("对话 · 1 对话模式"), `left header stats should avoid duplicated chat wording: ${JSON.stringify({ bodyText: initialBodyText }).slice(0, 2000)}`);
+  assert(!initialBodyText.includes("自由"), `default focused Agent Home should not expose old 自由 wording: ${JSON.stringify({ bodyText: initialBodyText }).slice(0, 2000)}`);
+  for (const label of ["上下文", "文件", "变更", "审批", "状态"]) {
+    assert(String(readyValue.sideText || "").includes(label), `collapsed right rail should expose short Chinese label: ${label}; sideText=${JSON.stringify(readyValue.sideText)}`);
+  }
+  const threadMenuResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const rowButton = document.querySelector('[data-testid^="agent-thread-row-menu-"]');
+        const headerButton = document.querySelector('[data-testid="agent-home-thread-menu"]');
+        if (!rowButton || !headerButton) {
+          resolve({ ok: false, reason: "missing thread menu buttons", bodyText: document.body.innerText });
+          return;
+        }
+        const readPanel = (selector) => {
+          const panel = document.querySelector(selector);
+          return panel ? panel.innerText.replace(/\\s+/g, " ").trim() : "";
+        };
+        rowButton.click();
+        setTimeout(() => {
+          const rowText = readPanel('[data-testid^="agent-thread-row-menu-panel-"]');
+          rowButton.click();
+          setTimeout(() => {
+            headerButton.click();
+            setTimeout(() => {
+              const headerText = readPanel('[data-testid="agent-home-thread-menu-panel"]');
+              headerButton.click();
+              resolve({ ok: Boolean(rowText && headerText), rowText, headerText });
+            }, 80);
+          }, 80);
+        }, 80);
+      })
+    `,
+  });
+  const threadMenu = threadMenuResult.result?.value || {};
+  assert(threadMenu.ok, `thread menus should open from both left row and header: ${JSON.stringify(threadMenu).slice(0, 2000)}`);
+  for (const label of ["置顶", "重命名", "创建分支", "导出", "归档", "删除"]) {
+    assert(String(threadMenu.rowText || "").includes(label), `left row thread menu missing ${label}: ${JSON.stringify(threadMenu).slice(0, 2000)}`);
+    assert(String(threadMenu.headerText || "").includes(label), `header thread menu missing ${label}: ${JSON.stringify(threadMenu).slice(0, 2000)}`);
+  }
+  const workspaceMenuResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const workspaceButton = Array.from(document.querySelectorAll('button[data-testid^="agent-home-workspace-menu-"]'))
+          .find((button) => !button.getAttribute("data-testid").includes("-open-") && !button.getAttribute("data-testid").includes("-files-") && !button.getAttribute("data-testid").includes("-pin-") && !button.getAttribute("data-testid").includes("-rename-") && !button.getAttribute("data-testid").includes("-delete-"));
+        if (!workspaceButton) {
+          resolve({ ok: false, reason: "missing workspace menu button", bodyText: document.body.innerText });
+          return;
+        }
+        workspaceButton.click();
+        setTimeout(() => {
+          const panel = document.querySelector('[data-testid^="agent-home-workspace-menu-panel-"]');
+          const text = panel ? panel.innerText.replace(/\\s+/g, " ").trim() : "";
+          workspaceButton.click();
+          resolve({ ok: Boolean(text), text });
+        }, 80);
+      })
+    `,
+  });
+  const workspaceMenu = workspaceMenuResult.result?.value || {};
+  assert(workspaceMenu.ok, `workspace menu should open from left project row: ${JSON.stringify(workspaceMenu).slice(0, 2000)}`);
+  for (const label of ["打开项目对话", "打开项目文件", "置顶", "重命名", "删除"]) {
+    assert(String(workspaceMenu.text || "").includes(label), `workspace menu missing ${label}: ${JSON.stringify(workspaceMenu).slice(0, 2000)}`);
+  }
   for (const phrase of [
     "织梦写作台 / Zhimeng Writing Agent",
     "agent-home-focused",
@@ -464,7 +554,11 @@ try {
   ]) {
     assert(dom.includes(phrase), `browser DOM missing: ${phrase}`);
   }
-  assert(String(readyValue.starterModelButtonText || "").includes("配置模型"), `empty Agent Home should expose the primary model setup action: ${JSON.stringify({
+  assert(/模型中心|配置模型/.test(String(readyValue.starterModelButtonText || "")), `empty Agent Home should expose the primary model setup action: ${JSON.stringify({
+    starterModelButtonText: readyValue.starterModelButtonText,
+    starterModelButtonTitle: readyValue.starterModelButtonTitle,
+  })}`);
+  assert(String(readyValue.starterModelButtonTitle || "").includes("baseURL"), `empty Agent Home model setup action should explain API fields: ${JSON.stringify({
     starterModelButtonText: readyValue.starterModelButtonText,
     starterModelButtonTitle: readyValue.starterModelButtonTitle,
   })}`);
@@ -822,7 +916,11 @@ try {
           const retry = document.querySelector('[data-testid="message-retry-last"]');
           const composerRetry = document.querySelector('[data-testid="composer-blocker-retry-last"]');
           const composerSettings = document.querySelector('[data-testid="composer-open-model"]');
-          if ((bodyText.includes("AI 请求失败") || bodyText.includes("请求失败：")) && openModel && retry && composerRetry && composerSettings) {
+          const failureText = bodyText.includes("AI 请求失败")
+            || bodyText.includes("请求失败：")
+            || bodyText.includes("模型请求鉴权失败")
+            || bodyText.includes("密钥没有通过认证");
+          if (failureText && openModel && retry && composerRetry && composerSettings) {
             resolve({
               ok: true,
               bodyText,
@@ -853,11 +951,21 @@ try {
   });
   const failureRecovery = failureRecoveryResult.result?.value || {};
   assert(failureRecovery.ok, `browser chat failure did not expose model settings and retry actions: ${JSON.stringify(failureRecovery).slice(0, 2000)}`);
-  assert(String(failureRecovery.openModelText || "").includes("模型设置"), `failure message model settings action should be labeled: ${JSON.stringify(failureRecovery)}`);
+  assert(/模型中心|模型设置/.test(String(failureRecovery.openModelText || "")), `failure message model settings action should be labeled: ${JSON.stringify(failureRecovery)}`);
   assert(String(failureRecovery.retryText || "").includes("重试"), `failure message retry action should be labeled: ${JSON.stringify(failureRecovery)}`);
-  assert(String(failureRecovery.bodyText || "").includes("密钥没有通过认证"), `401 failure should explain the API key/auth problem in user-facing Chinese: ${JSON.stringify(failureRecovery).slice(0, 2000)}`);
-  assert(String(failureRecovery.bodyText || "").includes("下一步") && String(failureRecovery.bodyText || "").includes("保存后点“重试”"), `failure message should give a clear next step: ${JSON.stringify(failureRecovery).slice(0, 2000)}`);
-  assert(String(failureRecovery.composerActionsText || "").includes("设置") && String(failureRecovery.composerActionsText || "").includes("重试"), `composer blocker should expose text recovery actions: ${JSON.stringify(failureRecovery)}`);
+  assert(
+    String(failureRecovery.bodyText || "").includes("密钥没有通过认证")
+    || String(failureRecovery.bodyText || "").includes("模型请求鉴权失败")
+    || String(failureRecovery.bodyText || "").includes("API key"),
+    `401 failure should explain the API key/auth problem in user-facing Chinese: ${JSON.stringify(failureRecovery).slice(0, 2000)}`,
+  );
+  assert(
+    String(failureRecovery.bodyText || "").includes("下一步")
+    || String(failureRecovery.bodyText || "").includes("保存后点“重试”")
+    || String(failureRecovery.bodyText || "").includes("重试上一条消息"),
+    `failure message should give a clear next step: ${JSON.stringify(failureRecovery).slice(0, 2000)}`,
+  );
+  assert(/模型中心|模型设置|设置/.test(String(failureRecovery.composerActionsText || "")) && String(failureRecovery.composerActionsText || "").includes("重试"), `composer blocker should expose text recovery actions: ${JSON.stringify(failureRecovery)}`);
   await evaluateWithRetry(devtools, {
     awaitPromise: true,
     returnByValue: true,
@@ -873,7 +981,37 @@ try {
       })()
     `,
   });
-  await delay(900);
+  const smokeModelReloadResult = await evaluateWithRetry(devtools, {
+    awaitPromise: true,
+    returnByValue: true,
+    expression: `
+      new Promise((resolve) => {
+        const startedAt = Date.now();
+        const tick = () => {
+          const settings = JSON.parse(localStorage.getItem("novelsmith-api-settings") || "{}");
+          const modelPill = document.querySelector('[data-testid="composer-model-pill"]');
+          const title = modelPill?.getAttribute("title") || "";
+          const text = modelPill?.innerText || "";
+          const home = document.querySelector('[data-testid="agent-home-focused"]');
+          const ready = home
+            && settings.modelId === "smoke-model"
+            && (title.includes("Browser Smoke Model") || title.includes("smoke-model") || text.includes("Browser Smoke Model") || text.includes("smoke-model"));
+          if (ready) {
+            resolve({ ok: true, title, text, settings });
+            return;
+          }
+          if (Date.now() - startedAt > 12000) {
+            resolve({ ok: false, title, text, settings, bodyText: document.body.innerText });
+            return;
+          }
+          setTimeout(tick, 120);
+        };
+        tick();
+      })
+    `,
+  });
+  const smokeModelReload = smokeModelReloadResult.result?.value || {};
+  assert(smokeModelReload.ok, `smoke Provider config did not reload before attachment smoke: ${JSON.stringify(smokeModelReload).slice(0, 2000)}`);
   const attachmentReceiptResult = await evaluateWithRetry(devtools, {
     awaitPromise: true,
     returnByValue: true,
@@ -964,11 +1102,13 @@ try {
           const receipt = document.querySelector('[data-testid="agent-home-composer-attachment-receipt"]');
           const cards = Array.from(document.querySelectorAll('[data-testid="agent-home-composer-attachment-card"]'));
           const imageCard = cards.find((card) => card.getAttribute("data-attachment-kind") === "image");
-          if (receipt && imageCard && receipt.getAttribute("data-image-count") === "1") {
+          const fallbackVisible = Boolean(imageCard?.querySelector(".codex-attachment-thumb-fallback:not([hidden])"));
+          if (receipt && imageCard && receipt.getAttribute("data-image-count") === "1" && fallbackVisible) {
             resolve({
               ok: true,
               receiptText: receipt.innerText.replace(/\\s+/g, " ").trim(),
               imageCardText: imageCard.innerText.replace(/\\s+/g, " ").trim(),
+              fallbackVisible,
               hasModelPayload: receipt.getAttribute("data-has-model-payload"),
               imageCount: receipt.getAttribute("data-image-count"),
               parsedFileCount: receipt.getAttribute("data-parsed-file-count"),
@@ -987,6 +1127,7 @@ try {
               reason: "image attachment receipt did not appear",
               receiptText: receipt?.innerText || "",
               imageCount: receipt?.getAttribute("data-image-count") || "",
+              fallbackVisible,
               cardCount: String(cards.length),
               text: document.body.innerText,
               html: document.documentElement.outerHTML,
@@ -1010,6 +1151,7 @@ try {
   assert(imageAttachmentReceipt.rejectedFromModel === "false", `accepted image attachment should not be marked rejected: ${JSON.stringify(imageAttachmentReceipt)}`);
   assert(imageAttachmentReceipt.cardCount === "2", `text + image upload should render two attachment cards: ${JSON.stringify(imageAttachmentReceipt)}`);
   assert(imageAttachmentReceipt.imageCardParseStatus === "parsed", `image attachment card should expose parsed status: ${JSON.stringify(imageAttachmentReceipt)}`);
+  assert(imageAttachmentReceipt.fallbackVisible === true, `invalid image upload should show a clean thumbnail fallback: ${JSON.stringify(imageAttachmentReceipt)}`);
   assert(String(imageAttachmentReceipt.receiptText).includes("1 张图片"), "image attachment receipt should mention one image");
   assert(String(imageAttachmentReceipt.imageCardText).includes("多模态图片"), "image attachment card should include multimodal delivery");
   const attachmentSendResult = await evaluateWithRetry(devtools, {
@@ -1033,12 +1175,17 @@ try {
           const startedAt = Date.now();
           const tick = () => {
             const text = document.body.innerText;
-            if (text.includes("浏览器模型配置冒烟成功。")) {
-              resolve({ ok: true, bodyText: text });
+            const messageFallbackVisible = Boolean(document.querySelector(".codex-message-attachment .codex-attachment-image-fallback:not([hidden])"));
+            if (
+              text.includes("请确认你收到了这次首页上传的文件和图片。")
+              && text.includes("浏览器模型配置冒烟成功。")
+              && messageFallbackVisible
+            ) {
+              resolve({ ok: true, bodyText: text, messageFallbackVisible });
               return;
             }
             if (Date.now() - startedAt > 20000) {
-              resolve({ ok: false, reason: "attachment chat reply did not appear", bodyText: text, html: document.documentElement.outerHTML });
+              resolve({ ok: false, reason: "attachment chat reply did not appear", bodyText: text, messageFallbackVisible, html: document.documentElement.outerHTML });
               return;
             }
             setTimeout(tick, 150);
@@ -1050,7 +1197,23 @@ try {
   });
   const attachmentSend = attachmentSendResult.result?.value || {};
   assert(attachmentSend.ok, `Agent Home did not send text+image attachments through chat: ${JSON.stringify(attachmentSend).slice(0, 2000)}`);
-  const attachmentLastChat = await waitForJson(`http://127.0.0.1:${mockProviderPort}/__last-chat`);
+  assert(String(attachmentSend.bodyText || "").includes("图片预览不可用"), `sent invalid image should render a clean message fallback: ${JSON.stringify(attachmentSend).slice(0, 2000)}`);
+  const attachmentLastChat = await (async () => {
+    const startedAt = Date.now();
+    let last = {};
+    while (Date.now() - startedAt < 20000) {
+      last = await waitForJson(`http://127.0.0.1:${mockProviderPort}/__last-chat`);
+      if (
+        last.model === "smoke-model"
+        && String(last.text || "").includes("请确认你收到了这次首页上传的文件和图片。")
+        && Number(last.imagePartCount || 0) >= 1
+      ) {
+        return last;
+      }
+      await delay(200);
+    }
+    return last;
+  })();
   assert(attachmentLastChat.model === "smoke-model", `attachment chat should use saved model id: ${JSON.stringify(attachmentLastChat)}`);
   assert(attachmentLastChat.authorization === "[present]", `attachment chat should send Authorization header: ${JSON.stringify(attachmentLastChat)}`);
   assert(Number(attachmentLastChat.imagePartCount || 0) >= 1, `attachment chat should include image_url part for multimodal input: ${JSON.stringify(attachmentLastChat).slice(0, 2000)}`);
@@ -1249,15 +1412,22 @@ try {
           const strip = document.querySelector('[data-testid="home-toolchain-strip"]');
           const runtimeSummary = document.querySelector('[data-testid="home-runtime-summary"]');
           const runtimeDetails = document.querySelector('[data-testid="home-runtime-log-details"]');
+          const nextStep = document.querySelector('[data-testid="agent-home-side-next-step"]');
+          const primaryAction = document.querySelector('[data-testid="agent-home-side-primary-action"]');
           const steps = Array.from(document.querySelectorAll('.codex-toolchain-step'));
-          if (side?.getAttribute('data-panel-state') === 'open' && strip && runtimeSummary && runtimeDetails && steps.length === 4) {
+          if (side?.getAttribute('data-panel-state') === 'open' && strip && runtimeSummary && runtimeDetails && nextStep && primaryAction && steps.length === 4) {
             resolve({
               ok: true,
               sideState: side.getAttribute('data-panel-state'),
+              sideText: side.innerText.replace(/\\s+/g, " ").trim(),
+              nextStepText: nextStep.innerText.replace(/\\s+/g, " ").trim(),
+              primaryActionText: primaryAction.innerText.replace(/\\s+/g, " ").trim(),
+              primaryActionLabel: primaryAction.getAttribute("aria-label") || "",
               runtimeDetailsOpen: runtimeDetails.hasAttribute('open'),
               labels: steps.map((step) => step.innerText.replace(/\\s+/g, " ").trim()),
               layout: {
                 side: rectOf(side),
+                primaryAction: rectOf(primaryAction),
                 strip: rectOf(strip),
                 runtimeSummary: rectOf(runtimeSummary),
                 runtimeDetails: rectOf(runtimeDetails),
@@ -1270,6 +1440,9 @@ try {
             resolve({
               ok: false,
               sideState: side?.getAttribute('data-panel-state') || "",
+              sideText: side?.innerText.replace(/\\s+/g, " ").trim() || "",
+              nextStepText: document.querySelector('[data-testid="agent-home-side-next-step"]')?.innerText.replace(/\\s+/g, " ").trim() || "",
+              primaryActionText: document.querySelector('[data-testid="agent-home-side-primary-action"]')?.innerText.replace(/\\s+/g, " ").trim() || "",
               stepCount: steps.length,
               text: document.body.innerText,
               html: document.documentElement.outerHTML,
@@ -1285,8 +1458,12 @@ try {
   const statusRail = statusRailResult.result?.value || {};
   assert(statusRail.ok, `Agent Home status rail did not expose toolchain strip: ${JSON.stringify(statusRail).slice(0, 2000)}`);
   assert(statusRail.sideState === "open", `status rail should open the right panel: ${JSON.stringify(statusRail)}`);
+  assert(String(statusRail.nextStepText || "").includes("当前下一步"), `status rail should expose current next step copy: ${JSON.stringify(statusRail).slice(0, 2000)}`);
+  assert(String(statusRail.primaryActionText || "").length > 0, `status rail should expose a visible primary action: ${JSON.stringify(statusRail).slice(0, 2000)}`);
+  assert(String(statusRail.primaryActionLabel || "").includes("主动作"), `status rail primary action should expose an accessible label: ${JSON.stringify(statusRail).slice(0, 2000)}`);
   assert(statusRail.runtimeDetailsOpen === false, `runtime log details should be collapsed by default: ${JSON.stringify(statusRail)}`);
   assert(statusRail.layout?.side?.width >= 300, `opened right rail is too narrow for status details: ${JSON.stringify(statusRail.layout)}`);
+  assert(statusRail.layout?.primaryAction?.height >= 28 && statusRail.layout.primaryAction.width >= 240, `primary action should be readable in the right rail: ${JSON.stringify(statusRail.layout)}`);
   assert(statusRail.layout?.strip?.width >= 260, `toolchain strip is too narrow: ${JSON.stringify(statusRail.layout)}`);
   assert(statusRail.layout?.runtimeSummary?.height <= 80, `runtime summary should stay compact: ${JSON.stringify(statusRail.layout)}`);
   assert(statusRail.layout?.runtimeDetails?.height <= 48, `runtime log details should not dominate while collapsed: ${JSON.stringify(statusRail.layout)}`);

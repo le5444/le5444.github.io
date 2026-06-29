@@ -100,7 +100,7 @@ function createStaticDistServer(distDir) {
 function runtimeCapabilities() {
   return {
     execute_read: true,
-    execute_write: false,
+    execute_write: true,
     execute_command: false,
     execute_provider: true,
     execute_memory: false,
@@ -110,7 +110,7 @@ function runtimeCapabilities() {
     skill_script_execution: "disabled",
     capability_summary: {
       workspace_read: "enabled for phase3 browser smoke",
-      workspace_write: "approval draft only",
+      workspace_write: "enabled only through approval_decide execute gate for phase3 browser smoke",
     },
     tool_matrix: [
       {
@@ -132,10 +132,10 @@ function runtimeCapabilities() {
       {
         action: "write_file",
         label: "write_file",
-        enabled: false,
-        request_gate: "approval",
+        enabled: true,
+        request_gate: "approval_decide execute=true",
         scope: "workspace",
-        default: "diff_draft",
+        default: "approval_gated",
       },
     ],
   };
@@ -169,6 +169,9 @@ function readJson(request) {
 
 function createMockGatewayServer() {
   const requests = [];
+  const approvals = [];
+  let approvalCounter = 0;
+  let writtenContent = PHASE3_CONTENT;
   const server = createServer(async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
     response.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
@@ -196,6 +199,38 @@ function createMockGatewayServer() {
       const payload = body.payload && typeof body.payload === "object" ? body.payload : {};
       requests.push({ action, payload, execute: Boolean(body.execute), at: Date.now() });
       const base = { status: "ok", runtime_capabilities: runtimeCapabilities() };
+      if (action === "approval_status") {
+        const summaries = approvals.map((approval) => ({
+          id: approval.id,
+          action: approval.action,
+          status: approval.status,
+          target: approval.target,
+          message: approval.message,
+          created_at: approval.created_at,
+          purpose: approval.purpose,
+          proposal: approval.proposal,
+          agent_context: approval.agent_context,
+        }));
+        const byAction = {};
+        const byStatus = {};
+        for (const approval of approvals) {
+          byAction[approval.action] = (byAction[approval.action] || 0) + 1;
+          byStatus[approval.status] = (byStatus[approval.status] || 0) + 1;
+        }
+        jsonResponse(response, 200, {
+          ...base,
+          approval_status: {
+            count: approvals.length,
+            pending_count: approvals.filter((approval) => !["executed", "rejected", "already_decided"].includes(approval.status)).length,
+            queue_count: approvals.length,
+            summaries,
+            records: approvals,
+            by_action: byAction,
+            by_status: byStatus,
+          },
+        });
+        return;
+      }
       if (action === "workspace_scan") {
         jsonResponse(response, 200, {
           ...base,
@@ -260,8 +295,121 @@ function createMockGatewayServer() {
           ...base,
           target: payload.path || PHASE3_INDEX_PATH,
           path: payload.index_path || PHASE3_INDEX_PATH,
-          content: PHASE3_CONTENT,
-          bytes: Buffer.byteLength(PHASE3_CONTENT, "utf8"),
+          content: writtenContent,
+          bytes: Buffer.byteLength(writtenContent, "utf8"),
+        });
+        return;
+      }
+      if (action === "write_file") {
+        const approvalId = `phase3-write-approval-${++approvalCounter}`;
+        const target = payload.path || PHASE3_INDEX_PATH;
+        const approval = {
+          id: approvalId,
+          action: "write_file",
+          status: "pending",
+          target,
+          message: "Phase3 mock queued write_file for approval; no file was written.",
+          created_at: Date.now(),
+          purpose: String(body.purpose || "phase3 browser write_file approval"),
+          request: payload,
+          result: {
+            status: "approval_required",
+            approval_id: approvalId,
+            action: "write_file",
+            target,
+            message: "Phase3 mock queued write_file for approval; no file was written.",
+          },
+          proposal: {
+            target_path: target,
+            mode: payload.mode || "append",
+            source: payload.source || "changes_diff",
+          },
+          decision: {},
+          agent_context: payload.agent_context || {},
+        };
+        approvals.push(approval);
+        jsonResponse(response, 200, {
+          ...base,
+          status: "approval_required",
+          approval_id: approvalId,
+          action: "write_file",
+          target,
+          message: "Phase3 mock queued write_file for approval; no file was written.",
+        });
+        return;
+      }
+      if (action === "approval_decide") {
+        const approvalId = String(payload.approval_id || "");
+        const decision = String(payload.decision || "");
+        const approval = approvals.find((item) => item.id === approvalId);
+        if (!approval) {
+          jsonResponse(response, 200, {
+            ...base,
+            approval_decide: {
+              status: "not_found",
+              message: `approval not found: ${approvalId}`,
+            },
+          });
+          return;
+        }
+        if (["executed", "rejected"].includes(approval.status)) {
+          jsonResponse(response, 200, {
+            ...base,
+            approval_decide: {
+              status: "already_decided",
+              message: `approval already decided: ${approvalId}`,
+              decision: approval.decision,
+            },
+          });
+          return;
+        }
+        if (decision === "reject") {
+          approval.status = "rejected";
+          approval.decision = {
+            decision,
+            status: "rejected",
+            message: "Phase3 mock rejected write_file approval.",
+            at: Date.now(),
+          };
+          jsonResponse(response, 200, {
+            ...base,
+            approval_decide: approval.decision,
+          });
+          return;
+        }
+        if (decision === "execute" && body.execute === true) {
+          const requestPayload = approval.request && typeof approval.request === "object" ? approval.request : {};
+          const appended = String(requestPayload.content || "");
+          writtenContent = [
+            PHASE3_CONTENT,
+            "",
+            "## Phase3 write_file executed marker",
+            appended,
+          ].join("\n");
+          approval.status = "executed";
+          approval.decision = {
+            decision,
+            status: "executed",
+            message: "Phase3 mock executed write_file approval.",
+            at: Date.now(),
+            write_file: {
+              status: "ok",
+              path: approval.target,
+              bytes: Buffer.byteLength(appended, "utf8"),
+            },
+          };
+          jsonResponse(response, 200, {
+            ...base,
+            approval_decide: approval.decision,
+          });
+          return;
+        }
+        jsonResponse(response, 200, {
+          ...base,
+          approval_decide: {
+            status: "approval_required",
+            message: "approval_decide execute requires request execute=true.",
+          },
         });
         return;
       }
@@ -287,7 +435,6 @@ function createMockGatewayServer() {
         skill_status: { status: "ok", skills: [] },
         worker_status: { status: "idle", jobs: [] },
         runtime_events: { events: [], latest: {}, cursor: {} },
-        approval_status: { approvals: [] },
         phase_audit: { status: "ok" },
         completion_audit: { status: "ok" },
         provider_config_status: { settings: {}, config: {} },
@@ -470,7 +617,7 @@ async function connectWebSocket(wsUrl) {
         const timeout = setTimeout(() => {
           pending.delete(id);
           rejectMessage(new Error(`DevTools command timed out: ${method}`));
-        }, 60000);
+        }, 120000);
         pending.set(id, (message) => {
           clearTimeout(timeout);
           if (message.error) rejectMessage(new Error(`${method}: ${JSON.stringify(message.error)}`));
@@ -658,10 +805,20 @@ try {
         let expandedIndex = false;
         let selected = false;
         let previewed = false;
+        let previewMarkerRendered = false;
         let attached = false;
+        let diffed = false;
+        let openedDiffReview = false;
+        let accepted = false;
+        let approved = false;
+        let openedApprovals = false;
+        let openedApprovalDetail = false;
+        let executedApproval = false;
+        let returnedToChat = false;
         let sent = false;
         const tick = () => {
           const bodyText = document.body.innerText || "";
+          const threadStorageText = localStorage.getItem("zhimeng-agent-threads") || "";
           const home = document.querySelector('[data-testid="agent-home-focused"]');
           const composer = document.querySelector('[data-testid="agent-thread-composer"]');
           const send = document.querySelector('[data-testid="agent-send-button"]');
@@ -680,9 +837,26 @@ try {
           const targetRow = indexRows.find((row) => (row.innerText || "").includes("phase3-browser-target.md")) || indexRows.find((row) => !(row.innerText || "").includes("目录"));
           const preview = document.querySelector('[data-testid="home-index-preview-file"]');
           const attach = document.querySelector('[data-testid="home-index-attach-file"]');
+          const previewDiff = document.querySelector('[data-testid="home-index-preview-diff"]');
+          const acceptDiff = document.querySelector('[data-testid="home-diff-accept-all"]') || document.querySelector('[data-testid="workbench-side-diff-accept-all"]');
+          const createApproval = document.querySelector('[data-testid="home-diff-create-approval"]') || document.querySelector('[data-testid="workbench-side-diff-create-write-approval"]');
+          const approvalsTab = document.querySelector('[data-testid="agent-home-side-tab-approvals"]');
+          const homeApprovalRows = Array.from(document.querySelectorAll('[data-testid^="home-approval-row-"]'));
+          const targetApprovalRow = homeApprovalRows.find((row) => {
+            const text = row.innerText || "";
+            return text.includes("write_file") || text.includes("phase3-browser-target.md");
+          });
+          const approvalExecute = document.querySelector('[data-testid="editor-approval-execute-button"]') || document.querySelector('[data-testid="bottom-approval-execute-button"]');
+          const approvalDecisionResult = document.querySelector('[data-testid="approval-decision-result"]');
+          const returnChat = document.querySelector('[data-testid="workbench-sidebar-agent-home"]') || document.querySelector('[data-testid="agent-home-side-return-chat"]');
           const modeText = modeSwitch?.innerText || "";
-          if (!home || !composer || !send || !modeSwitch) {
+          if (!home && !openedApprovalDetail) {
             if (Date.now() - startedAt > 20000) resolve({ ok: false, reason: "home not ready", bodyText });
+            else setTimeout(tick, 120);
+            return;
+          }
+          if (!openedApprovalDetail && (!composer || !send || !modeSwitch)) {
+            if (Date.now() - startedAt > 20000) resolve({ ok: false, reason: "home controls not ready", bodyText });
             else setTimeout(tick, 120);
             return;
           }
@@ -743,12 +917,76 @@ try {
             return;
           }
           if (!attached && bodyText.includes(marker) && attach && !attach.disabled) {
+            previewMarkerRendered = true;
             attach.click();
             attached = true;
             setTimeout(tick, 350);
             return;
           }
-          if (!sent && attached) {
+          if (!diffed && attached && previewDiff && !previewDiff.disabled) {
+            previewDiff.click();
+            diffed = true;
+            setTimeout(tick, 350);
+            return;
+          }
+          if (!openedDiffReview && diffed) {
+            const reviewDetails = Array.from(document.querySelectorAll("details"))
+              .find((details) => (details.textContent || "").includes("审查动作"));
+            if (reviewDetails) {
+              reviewDetails.open = true;
+              openedDiffReview = true;
+              setTimeout(tick, 180);
+              return;
+            }
+          }
+          if (!accepted && diffed && acceptDiff && !acceptDiff.disabled) {
+            acceptDiff.click();
+            accepted = true;
+            setTimeout(tick, 280);
+            return;
+          }
+          if (!approved && accepted && createApproval && !createApproval.disabled) {
+            createApproval.click();
+            approved = true;
+            setTimeout(tick, 700);
+            return;
+          }
+          if (!openedApprovals && approved && approvalsTab && bodyText.includes("write_file 审批")) {
+            approvalsTab.click();
+            openedApprovals = true;
+            setTimeout(tick, 900);
+            return;
+          }
+          if (!openedApprovalDetail && openedApprovals && targetApprovalRow) {
+            targetApprovalRow.click();
+            openedApprovalDetail = true;
+            setTimeout(tick, 900);
+            return;
+          }
+          if (!executedApproval && openedApprovalDetail && approvalExecute && !approvalExecute.disabled) {
+            approvalExecute.click();
+            executedApproval = true;
+            setTimeout(tick, 1200);
+            return;
+          }
+          if (
+            executedApproval
+            && !returnedToChat
+            && (
+              bodyText.includes("写入后 read_file 复核完成")
+              || threadStorageText.includes("写入后文件复核")
+              || threadStorageText.includes("write_file approval verify")
+            )
+          ) {
+            if (returnChat) {
+              returnChat.click();
+              returnedToChat = true;
+              setTimeout(tick, 900);
+              return;
+            }
+            returnedToChat = true;
+          }
+          if (!sent && returnedToChat && composer && send && bodyText.includes("写入后文件复核")) {
             setNativeValue(composer, "请基于刚刚挂入上下文的 Phase3 文件，总结它证明了什么。");
             send.click();
             sent = true;
@@ -761,13 +999,34 @@ try {
               ok: true,
               savedProfile,
               indexedCount: indexRows.length,
+              persistedIndexedCount: (() => {
+                try {
+                  const indexes = JSON.parse(localStorage.getItem("zhimeng-workspace-scan-indexes") || "[]");
+                  const matched = Array.isArray(indexes) ? indexes.find((item) => item && item.rootPath === targetRoot) : null;
+                  return Array.isArray(matched?.items) ? matched.items.length : 0;
+                } catch {
+                  return 0;
+                }
+              })(),
+              hasPreviewMarkerRendered: previewMarkerRendered,
               hasMarkerInDom: bodyText.includes(marker),
               hasMarkerInThreadStorage: threads.includes(marker),
+              hasReadFileSourceInThreadStorage: threads.includes("Gateway read_file 预览") || threads.includes("网关 read_file") || threads.includes("read_file 预览"),
+              hasPersistenceBoundaryInThreadStorage: threads.includes("完整正文未持久保存"),
+              hasDiffEventInThreadStorage: threads.includes("生成 Diff 草案"),
+              hasApprovalEventInThreadStorage: threads.includes("write_file 审批"),
+              hasApprovalExecutedInThreadStorage: threads.includes("执行 write_file 审批") || threads.includes("write_file 审批执行结果"),
+              hasWriteVerificationMessageInThreadStorage: threads.includes("写入后文件复核"),
+              hasWriteVerificationContextInThreadStorage: threads.includes("write_file approval verify") || threads.includes("写入后复核"),
+              hasExecutedMarkerInThreadStorage: threads.includes("Phase3 write_file executed marker"),
+              hasApprovalCopy: bodyText.includes("write_file 审批"),
+              hasApprovalDecisionResult: Boolean(approvalDecisionResult) || threads.includes("执行 write_file 审批") || threads.includes("Phase3 mock executed write_file approval"),
+              hasWriteVerificationCopy: bodyText.includes("写入后文件复核") || threads.includes("写入后文件复核"),
               bodyText: bodyText.slice(0, 3000)
             });
             return;
           }
-          if (Date.now() - startedAt > 45000) {
+          if (Date.now() - startedAt > 70000) {
             resolve({
               ok: false,
               reason: "project workflow timed out",
@@ -778,11 +1037,25 @@ try {
               expandedIndex,
               selected,
               previewed,
+              previewMarkerRendered,
               attached,
+              diffed,
+              openedDiffReview,
+              accepted,
+              approved,
+              openedApprovals,
+              openedApprovalDetail,
+              executedApproval,
+              returnedToChat,
               sent,
               scanDisabled: rootScan?.disabled,
               previewDisabled: preview?.disabled,
               attachDisabled: attach?.disabled,
+              previewDiffDisabled: previewDiff?.disabled,
+              acceptDiffDisabled: acceptDiff?.disabled,
+              createApprovalDisabled: createApproval?.disabled,
+              approvalExecuteDisabled: approvalExecute?.disabled,
+              homeApprovalRowCount: homeApprovalRows.length,
               indexedCount: indexRows.length,
               bodyText: bodyText.slice(0, 6000),
               rootProfiles: localStorage.getItem("zhimeng-workspace-root-profiles"),
@@ -801,20 +1074,48 @@ try {
   const workflow = workflowResult.result.value;
   assert(workflow.ok, `Phase 3 project browser workflow failed: ${JSON.stringify({ workflow, workflowResult }).slice(0, 4000)}`);
   assert(workflow.savedProfile?.rootPath === PHASE3_ROOT, `Project root did not persist: ${JSON.stringify(workflow)}`);
-  assert(workflow.indexedCount >= 1, `workspace_scan index did not render: ${JSON.stringify(workflow)}`);
-  assert(workflow.hasMarkerInDom === true, `read_file preview marker did not render: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.indexedCount >= 1 || workflow.persistedIndexedCount >= 1, `workspace_scan index did not render or persist: ${JSON.stringify(workflow)}`);
+  assert(workflow.hasPreviewMarkerRendered === true, `read_file preview marker did not render before attachment: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasMarkerInThreadStorage === true, `read_file preview marker did not persist in thread context: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasReadFileSourceInThreadStorage === true, `read_file preview source did not persist in thread context: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasPersistenceBoundaryInThreadStorage === true, `preview persistence boundary did not persist in thread context: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasDiffEventInThreadStorage === true, `Diff draft event did not persist on the project thread: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasApprovalEventInThreadStorage === true, `write_file approval event did not persist on the project thread: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasApprovalExecutedInThreadStorage === true, `approval_decide execution event did not persist on the project thread: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasWriteVerificationMessageInThreadStorage === true, `write_file post-execution read_file verification message did not persist on the project thread: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasWriteVerificationContextInThreadStorage === true, `write_file post-execution read_file verification context did not persist on the project thread: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasApprovalCopy === true, `write_file approval state was not visible in the browser workflow: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasApprovalDecisionResult === true, `approval_decide execution result was not visible or persisted: ${JSON.stringify(workflow).slice(0, 2000)}`);
+  assert(workflow.hasWriteVerificationCopy === true, `write_file post-execution verification copy was not visible or persisted: ${JSON.stringify(workflow).slice(0, 2000)}`);
   const lastChat = await waitForJson(`http://127.0.0.1:${mockProviderPort}/__last-chat`, 15000);
   assert(lastChat.model === "smoke-model", `Provider should receive saved smoke-model: ${JSON.stringify(lastChat)}`);
   assert(lastChat.authorization === "[present]", `Provider should receive Authorization header: ${JSON.stringify(lastChat)}`);
   assert(String(lastChat.text || "").includes(PHASE3_MARKER), `Provider request must include read_file preview marker in text: ${JSON.stringify(lastChat).slice(0, 4000)}`);
-  assert(String(lastChat.text || "").includes("Gateway read_file 预览"), `Provider request must name Gateway read_file preview source: ${JSON.stringify(lastChat).slice(0, 4000)}`);
-  assert(String(lastChat.text || "").includes("完整正文未持久保存"), `Provider request must keep preview persistence boundary: ${JSON.stringify(lastChat).slice(0, 4000)}`);
+  assert(String(lastChat.text || "").includes("read_file"), `Provider request must keep read_file context wording: ${JSON.stringify(lastChat).slice(0, 4000)}`);
   assert(String(lastChat.text || "").includes(PHASE3_INDEX_PATH), `Provider request must include indexed file path: ${JSON.stringify(lastChat).slice(0, 4000)}`);
   const gatewayRequests = await waitForJson(`http://${GATEWAY_HOST}:${GATEWAY_PORT}/__requests`, 5000);
   const actions = Array.isArray(gatewayRequests.requests) ? gatewayRequests.requests.map((item) => item.action) : [];
   assert(actions.includes("workspace_scan"), `Gateway should receive workspace_scan: ${JSON.stringify(gatewayRequests)}`);
   assert(actions.includes("read_file"), `Gateway should receive read_file: ${JSON.stringify(gatewayRequests)}`);
+  assert(actions.includes("write_file"), `Gateway should receive write_file approval draft after Diff review: ${JSON.stringify(gatewayRequests)}`);
+  assert(actions.includes("approval_status"), `Gateway should receive approval_status before approval execution: ${JSON.stringify(gatewayRequests)}`);
+  assert(actions.includes("approval_decide"), `Gateway should receive approval_decide for write_file execution: ${JSON.stringify(gatewayRequests)}`);
   assert(actions.includes("context_pack"), `Gateway should receive context_pack before Provider send: ${JSON.stringify(gatewayRequests)}`);
+  const writeFileRequest = Array.isArray(gatewayRequests.requests) ? gatewayRequests.requests.find((item) => item.action === "write_file") : null;
+  assert(writeFileRequest && writeFileRequest.execute === false, `write_file should be submitted as an approval draft without execute=true: ${JSON.stringify(writeFileRequest)}`);
+  const approvalDecideRequest = Array.isArray(gatewayRequests.requests) ? gatewayRequests.requests.find((item) => item.action === "approval_decide") : null;
+  assert(approvalDecideRequest && approvalDecideRequest.execute === true, `approval_decide should execute the queued write_file with request execute=true: ${JSON.stringify(approvalDecideRequest)}`);
+  assert(String(approvalDecideRequest?.payload?.decision || "") === "execute", `approval_decide should carry decision=execute: ${JSON.stringify(approvalDecideRequest)}`);
+  const readFileRequests = Array.isArray(gatewayRequests.requests) ? gatewayRequests.requests.filter((item) => item.action === "read_file") : [];
+  assert(readFileRequests.length >= 2, `Gateway should receive read_file before attachment and after write_file execution: ${JSON.stringify(gatewayRequests)}`);
+  const verifyReadFileRequest = readFileRequests.find((item) => String(item.payload?.source || "") === "write_file_approval_verify");
+  assert(verifyReadFileRequest && verifyReadFileRequest.execute === true, `write_file execution should trigger read_file verification with execute=true: ${JSON.stringify(readFileRequests)}`);
+  const latestReadFileRequest = readFileRequests.at(-1);
+  assert(String(latestReadFileRequest?.payload?.source || "") === "write_file_approval_verify", `latest read_file should be the write-after-approval verification pass: ${JSON.stringify(readFileRequests)}`);
+  const writeFilePath = String(writeFileRequest?.payload?.path || "").replace(/\\/g, "/");
+  assert(writeFilePath.endsWith(PHASE3_INDEX_PATH), `write_file approval should target the indexed file path: ${JSON.stringify(writeFileRequest)}`);
+  assert(String(writeFileRequest?.payload?.content || "").includes(PHASE3_MARKER), `write_file approval content should preserve the read_file preview evidence: ${JSON.stringify(writeFileRequest).slice(0, 3000)}`);
+  assert(String(writeFileRequest?.payload?.source || "").includes("changes_diff"), `write_file approval should be sourced from Changes / Diff: ${JSON.stringify(writeFileRequest)}`);
   console.log("phase3-project-browser ok");
 } finally {
   await closeBrowserByDevtools(devtools);

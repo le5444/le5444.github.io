@@ -71,8 +71,35 @@ function formatTraceMetaChip(value: string) {
   if (kind === "approval") return `审批 ${compactApprovalId(body)}`;
   if (kind === "run") return `run ${truncateMiddle(body, 10)}`;
   if (kind === "thread") return `线程 ${truncateMiddle(body, 10)}`;
+  if (kind === "path") return `文件 ${truncateMiddle(body, 12)}`;
+  if (kind === "root") return `目录 ${truncateMiddle(body, 12)}`;
+  if (kind === "root_input") return `输入 ${truncateMiddle(body, 12)}`;
+  if (kind === "files") return `${body} 文件`;
   if (kind === "review") return `审查 ${body}`;
   return value;
+}
+
+function traceMetaPriority(value: string) {
+  const kind = value.split(":", 1)[0];
+  const priorities: Record<string, number> = {
+    approval: 1,
+    path: 2,
+    root: 3,
+    files: 4,
+    request: 5,
+    run: 6,
+    root_input: 7,
+    review: 8,
+    thread: 9,
+    purpose: 10,
+  };
+  return priorities[kind] || 20;
+}
+
+function prioritizedTraceMeta(meta: string[]) {
+  return [...meta]
+    .filter(Boolean)
+    .sort((a, b) => traceMetaPriority(a) - traceMetaPriority(b));
 }
 
 function stripTraceNextStepPrefix(value: string) {
@@ -167,7 +194,7 @@ export function WorkbenchToolTracePanel({
           const nextStep = traceNextStepForRow(entry);
           const nextStepTone = traceNextStepTone(entry);
           const visibleDetail = traceDetailWithoutNextStep(entry.detail);
-          const meta = entry.meta || [];
+          const meta = prioritizedTraceMeta(entry.meta || []);
           return (
             <div key={`home-tool-trace-${entry.id}`} className="codex-side-row codex-tool-row rounded border border-slate-800 bg-slate-950/70 px-2 py-2" data-testid="home-tool-trace-row">
               <div className="flex items-center justify-between gap-2">
@@ -185,7 +212,7 @@ export function WorkbenchToolTracePanel({
               </div>
               {meta.length > 0 && (
                 <div className="mt-1 flex min-w-0 flex-wrap gap-1" data-testid="home-tool-trace-meta">
-                  {meta.slice(0, 2).map((item) => (
+                  {meta.slice(0, 3).map((item) => (
                     <span key={`${entry.id}-${item}`} className="max-w-full truncate rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[9px] text-slate-500" title={item}>
                       {formatTraceMetaChip(item)}
                     </span>

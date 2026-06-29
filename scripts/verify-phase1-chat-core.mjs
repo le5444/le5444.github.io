@@ -9,6 +9,7 @@ const checks = [
   ["附件多模态本地冒烟", "scripts/verify-agent-chat-attachment-api-smoke.mjs"],
   ["模型测试空回复守门", "scripts/verify-model-test-empty-reply-guard.mjs"],
   ["桌面 Provider 配置到聊天冒烟", "scripts/verify-desktop-provider-chat-smoke.mjs"],
+  ["Provider 粘贴配置解析", "scripts/verify-provider-config-paste.mjs"],
   ["Provider/API 配置边界", "scripts/verify-provider-config-boundary.mjs"],
   ["附件解析入口", "scripts/verify-agent-attachment-intake.mjs"],
   ["Bridge 请求协议", "scripts/verify-executor-bridge.mjs"],

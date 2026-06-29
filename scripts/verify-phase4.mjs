@@ -16,6 +16,7 @@ function run(label, command, args) {
 const checks = [
   ["Phase 3 项目模式总闸门", process.execPath, ["scripts/verify-phase3.mjs"]],
   ["Phase 4 Agent Runtime 工具链", process.execPath, ["scripts/verify-phase4-agent-runtime.mjs"]],
+  ["审批续跑提示", process.execPath, ["scripts/verify-agent-loop-resume-prompt.mjs"]],
 ];
 
 for (const [label, command, args] of checks) {

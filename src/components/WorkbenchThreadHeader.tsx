@@ -144,7 +144,7 @@ export function WorkbenchThreadHeader({
               disabled={modeDisabled}
               className={`codex-thread-mode-button ${projectModeActive ? "is-project" : "is-chat"}`}
               title={modeTitle}
-              aria-label={projectModeActive ? "切到自由对话" : "切到项目模式"}
+              aria-label={projectModeActive ? "切到对话模式" : "切到项目模式"}
               data-testid="agent-home-header-mode-switch"
             >
               {projectModeActive ? <FolderKanban className="h-3 w-3" /> : <MessageSquare className="h-3 w-3" />}
@@ -171,7 +171,7 @@ export function WorkbenchThreadHeader({
                     : "is-needed"
             }`}
             title={modelTitle}
-            aria-label="打开模型配置"
+            aria-label="打开模型中心"
             data-testid="agent-home-header-model-settings"
           >
             <Server className="h-3.5 w-3.5" />
@@ -204,8 +204,8 @@ export function WorkbenchThreadHeader({
             type="button"
             onClick={onToggleMode}
             disabled={modeDisabled}
-            title={projectModeActive ? "切到自由对话" : modeDisabled ? "先选择或创建项目后启用" : "切到项目模式"}
-            aria-label={projectModeActive ? "切到自由对话" : "切到项目模式"}
+            title={projectModeActive ? "切到对话模式" : modeDisabled ? "先选择或创建项目后启用" : "切到项目模式"}
+            aria-label={projectModeActive ? "切到对话模式" : "切到项目模式"}
             data-testid="agent-home-thread-toggle-mode"
             className={`codex-thread-chip is-icon ${projectModeActive ? "is-project" : ""}`}
           >

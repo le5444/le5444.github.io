@@ -253,7 +253,7 @@ assert(controlCenterSource.includes("homeHeaderModelLabel"), "Agent Home should 
 assert(controlCenterSource.includes("填写接口地址、API key 和模型 ID"), "Agent Home header should explain custom API setup when unconfigured");
 assert(controlCenterSource.includes("onOpenModelSettings={openQuickModelSettings}") || threadHeaderSource.includes("onClick={onOpenModelSettings}"), "Agent Home header model entry should open the lightweight settings modal");
 assert(controlCenterSource.includes('id: "config-model"'), "Agent Home empty state should expose a direct model configuration action when setup is missing");
-assert(controlCenterSource.includes('label: "配置模型"'), "Agent Home model configuration action should be named plainly in Chinese");
+assert(controlCenterSource.includes('label: "模型中心"'), "Agent Home model configuration action should open the model center in plain Chinese");
 assert(controlCenterSource.includes("onClick: openQuickModelSettings"), "Agent Home model configuration action should open the lightweight settings modal");
 assert(controlCenterSource.includes('data-testid="provider-center-quick-api-key-input"'), "Provider center quick setup should allow direct API key entry");
 assert(controlCenterSource.includes('data-testid="provider-center-api-key-input"'), "Provider center full draft form should allow direct API key entry");

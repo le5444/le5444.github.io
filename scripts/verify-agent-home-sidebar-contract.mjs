@@ -41,6 +41,16 @@ assert(!component.includes("agent-home-side-tab-model"), "Agent Home side rail m
 assert(!component.includes("agent-model-drawer"), "Agent Home must not keep the legacy model drawer JSX");
 assert(component.includes('data-testid="agent-home-side-return-chat"'), "Agent Home right side panel should expose a visible return-to-chat action");
 assert(component.includes('data-testid="agent-home-side-collapse"'), "Agent Home right side panel should expose a visible collapse action");
+assert(component.includes("type AgentHomeSideStatus"), "Agent Home right side tabs should track compact status");
+assert(component.includes("homeSideStatusLabels"), "Agent Home right side tabs should translate status into Chinese labels");
+assert(component.includes("data-side-tab-status={tab.status}"), "Agent Home right side tabs should expose status in DOM");
+assert(component.includes("codex-side-rail-status"), "Agent Home right side tabs should render a compact status dot");
+assert(component.includes("activeHomeSidePrimaryAction"), "Agent Home right side panel should derive a tab-specific primary action");
+assert(component.includes('data-testid="agent-home-side-primary-action"'), "Agent Home right side panel should expose one visible primary action");
+assert(component.includes("aria-label={`${activeHomeSideLabel}主动作：${activeHomeSidePrimaryAction.label}`"), "Agent Home primary action should be accessible and tab-specific");
+for (const status of ["ready", "pending", "missing", "issue", "active"]) {
+  assert(component.includes(`"${status}"`) || component.includes(`${status}:`), `Agent Home side tab status missing ${status}`);
+}
 const returnToChatIndex = component.indexOf('data-testid="agent-home-side-return-chat"');
 const returnToChatHandler = component.slice(Math.max(0, returnToChatIndex - 420), returnToChatIndex + 120);
 assert(returnToChatHandler.includes("setAgentHomeSidePanelOpen(false);") && returnToChatHandler.includes("focusAgentChat();"), "Return-to-chat should collapse the side panel and focus the composer");
@@ -67,7 +77,7 @@ assert(component.includes("providerReadiness.label"), "Agent Home short status s
 assert(homeSurface.includes('data-testid="agent-home-header-mode-switch"'), "Agent Home header should expose a clear chat/project mode switch");
 assert(component.includes("const homeHeaderModeStatus = projectModeActive"), "Agent Home header should summarize whether project mode has a bound directory");
 assert(component.includes("const homeHeaderModeTitle = projectModeActive"), "Agent Home header mode switch should explain chat/project mode boundaries");
-assert(component.includes("对话模式不强制绑定项目目录"), "Agent Home should explain free chat mode does not require a project directory");
+assert(component.includes("对话模式不绑定项目目录"), "Agent Home should explain chat mode does not require a project directory");
 assert(component.includes("项目模式建议绑定本机文件夹"), "Agent Home should explain project mode binding when no local directory is present");
 assert(component.includes("selectedWorkspaceScanIndex.fileCount"), "Agent Home header should expose indexed project file count when available");
 assert(component.includes('? "需要配置模型"'), "Public model state should clearly say when model setup is missing");
@@ -93,7 +103,7 @@ assert(quickSettings, "openQuickModelSettings callback not found");
 assert(quickSettings[0].includes("onOpenSettings()"), "Quick model settings should open the lightweight settings modal");
 assert(!quickSettings[0].includes('activeView: "providers"'), "Quick model settings must not jump to the full Provider workbench");
 
-assert(component.includes('label: "打开模型设置"'), "Command palette should expose the model settings action");
+assert(component.includes('label: "打开模型中心"'), "Command palette should expose the model center action");
 assert(component.includes('label: selectedWorkspaceRootProfile?.rootPath?.trim() ? "刷新项目目录索引" : "绑定项目目录"'), "Command palette should expose a project index refresh action");
 assert(component.includes("scanReady ? `扫描 ${formatTime(scanIndex.at)}`"), "Workspace rows should expose last scan time as a compact chip");
 
@@ -139,7 +149,7 @@ for (const snippet of [
 }
 assert(component.includes("<WorkbenchThreadFilterBar"), "Agent Home should mount a dedicated thread filter bar component");
 assert(threadFilterBar.includes('data-testid={`agent-home-thread-filter-${item.key}`}'), "Agent Home thread filter buttons need stable test ids");
-for (const filter of ['{ key: "all", label: "全部" }', '{ key: "pinned", label: "置顶" }', '{ key: "project", label: "项目" }', '{ key: "free", label: "自由" }']) {
+for (const filter of ['{ key: "all", label: "全部" }', '{ key: "pinned", label: "置顶" }', '{ key: "project", label: "项目" }', '{ key: "free", label: "对话" }']) {
   assert(threadFilterBar.includes(filter), `Agent Home missing thread filter: ${filter}`);
 }
 

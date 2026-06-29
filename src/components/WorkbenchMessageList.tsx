@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, RefreshCw, Settings } from "lucide-react";
+import { CheckCircle2, Copy, ImageOff, RefreshCw, Settings } from "lucide-react";
 import type { AgentThreadMessage, AgentThreadMessageAttachment } from "../utils/agent-thread-store";
 
 function formatNumber(value: number) {
@@ -88,6 +88,15 @@ function toolMessageDisplay(message: AgentThreadMessage) {
           ? "工具完成"
           : "工具轨迹";
   const tone = isError ? "error" : isApproval ? "approval" : isToolRequest ? "request" : "result";
+  const nextStep = isError
+    ? "下一步：处理失败"
+    : isApproval
+      ? "下一步：审查审批"
+      : isToolRequest
+        ? "下一步：等待网关"
+        : isToolResult
+          ? "下一步：继续推理"
+          : "下一步：查看详情";
   const chips = [
     statusLine?.replace(/^状态：/, ""),
     approvalLine?.replace(/^审批：/, ""),
@@ -96,6 +105,7 @@ function toolMessageDisplay(message: AgentThreadMessage) {
     label,
     action: action || "工具",
     summary,
+    nextStep,
     detail: contentText || title,
     tone,
     chips,
@@ -218,12 +228,18 @@ export function WorkbenchMessageList({
             {message.role === "tool" ? (() => {
               const toolView = toolMessageDisplay(message);
               return (
-                <details className={`codex-tool-message codex-tool-${toolView.tone} mt-2`} open={!toolView.collapsed}>
-                  <summary className="codex-tool-summary">
+                <details
+                  className={`codex-tool-message codex-main-tool-step codex-tool-${toolView.tone} mt-2`}
+                  data-tool-tone={toolView.tone}
+                  data-testid="main-tool-message"
+                  open={!toolView.collapsed}
+                >
+                  <summary className="codex-tool-summary" data-testid="main-tool-message-summary">
                     <span className="codex-tool-dot" />
                     <span className="codex-tool-label">{toolView.label}</span>
                     <span className="codex-tool-action">{toolView.action}</span>
                     <span className="codex-tool-brief">{toolView.summary}</span>
+                    <span className="codex-tool-next-step" data-testid="main-tool-message-next-step">{toolView.nextStep}</span>
                     {toolView.chips.map((chip) => (
                       <span key={`${message.id}-${chip}`} className="codex-tool-chip">{chip}</span>
                     ))}
@@ -239,7 +255,22 @@ export function WorkbenchMessageList({
                 {message.attachments.map((attachment) => (
                   <div key={attachment.id} className="codex-message-attachment overflow-hidden rounded border border-slate-800 bg-[#0b0f15]">
                     {attachment.kind === "image" && attachment.dataUrl ? (
-                      <img src={attachment.dataUrl} alt={attachment.name} className="max-h-40 w-full bg-slate-950 object-contain" />
+                      <div className="codex-attachment-image-frame">
+                        <img
+                          src={attachment.dataUrl}
+                          alt={attachment.name}
+                          className="codex-attachment-image max-h-40 w-full bg-slate-950 object-contain"
+                          onError={(event) => {
+                            event.currentTarget.hidden = true;
+                            const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
+                            if (fallback) fallback.hidden = false;
+                          }}
+                        />
+                        <div className="codex-attachment-image-fallback" hidden>
+                          <ImageOff className="h-4 w-4" />
+                          <span>图片预览不可用</span>
+                        </div>
+                      </div>
                     ) : null}
                     <div className="px-2 py-2">
                       <div className="truncate text-[10px] font-medium text-slate-200">{attachment.name}</div>

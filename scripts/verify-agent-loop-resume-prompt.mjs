@@ -67,6 +67,27 @@ const liveApprovals = [
     status: "executed",
     target: "src/app.ts",
     message: "写入审批已经执行。",
+    result: {
+      approval_decide: {
+        write_file: {
+          path: "src/app.ts",
+          backup_path: "bridge/backups/app.ts.bak",
+          sha256: "abc123",
+          bytes: 42,
+          message: "写入成功",
+        },
+        write_file_verify_read_result: {
+          action: "read_file",
+          source: "write_file_approval_verify",
+          approval_id: "approval-write-2",
+          target_path: "src/app.ts",
+          status: "ok",
+          content_chars: 42,
+          detail: "已复核 42 字符：src/app.ts",
+          content_preview: "export const ok = true;\n",
+        },
+      },
+    },
   },
 ];
 
@@ -139,11 +160,16 @@ assert(bundle.task.includes("- stdout：\n    v22.19.0"), "bundle task includes 
 assert(bundle.task.includes("写入执行证据："), "bundle task includes write evidence");
 assert(bundle.task.includes("- 备份：bridge/backups/app.ts.bak"), "bundle task includes backup path");
 assert(bundle.task.includes("- sha256：abc123"), "bundle task includes write hash");
+assert(bundle.task.includes("写后复核证据："), "bundle task includes write verification evidence");
+assert(bundle.task.includes("- 来源：write_file_approval_verify"), "bundle task includes write verification source");
+assert(bundle.task.includes("- 路径：src/app.ts"), "bundle task includes write verification path");
 assert(bundle.task.includes("任务完成时回复 ZHIMENG_TASK_COMPLETE。"), "bundle task keeps completion marker");
 assert(bundle.evidenceSummary.includes("run_command · 状态 executed · 目标 node --version"), "summary includes command approval");
 assert(bundle.evidenceSummary.includes("stdout： · v22.19.0"), "summary includes command stdout");
 assert(bundle.evidenceSummary.includes("write_file · 状态 executed · 目标 src/app.ts"), "summary includes write approval");
 assert(bundle.evidenceSummary.includes("备份：bridge/backups/app.ts.bak"), "summary includes write backup");
+assert(bundle.evidenceSummary.includes("写后复核证据："), "summary includes write verification evidence");
+assert(bundle.evidenceSummary.includes("来源：write_file_approval_verify"), "summary includes write verification source");
 
 const fallbackBundle = buildAgentLoopResumePromptBundle({
   resume: {

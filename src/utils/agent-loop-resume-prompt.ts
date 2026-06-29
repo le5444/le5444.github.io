@@ -56,6 +56,25 @@ function approvalRecordMap(records: AgentLoopApprovalResumeRecordForPrompt[] = [
   return map;
 }
 
+function mergeApprovalRecordPart(primary: unknown, fallback: unknown) {
+  const primaryRecord = asRecord(primary);
+  const fallbackRecord = asRecord(fallback);
+  const merged: Record<string, unknown> = { ...fallbackRecord, ...primaryRecord };
+  const fallbackApprovalDecide = asRecord(fallbackRecord.approval_decide);
+  const primaryApprovalDecide = asRecord(primaryRecord.approval_decide);
+  if (Object.keys(fallbackApprovalDecide).length || Object.keys(primaryApprovalDecide).length) {
+    merged.approval_decide = {
+      ...fallbackApprovalDecide,
+      ...primaryApprovalDecide,
+      decision: {
+        ...asRecord(fallbackApprovalDecide.decision),
+        ...asRecord(primaryApprovalDecide.decision),
+      },
+    };
+  }
+  return merged;
+}
+
 function approvalSnapshotMap(snapshots: AgentLoopApprovalSnapshotForPrompt[] = []) {
   const map = new Map<string, AgentLoopApprovalSnapshotForPrompt>();
   snapshots.forEach((snapshot) => {
@@ -79,9 +98,9 @@ export function buildAgentLoopApprovalResumeItems(params: {
       const live = liveById.get(id);
       const snapshot = snapshotById.get(id);
       const record = recordById.get(id);
-      const decision = asRecord(record?.decision ?? live?.decision);
-      const result = asRecord(record?.result ?? live?.result);
-      const request = asRecord(record?.request ?? live?.request);
+      const decision = mergeApprovalRecordPart(record?.decision, live?.decision);
+      const result = mergeApprovalRecordPart(record?.result, live?.result);
+      const request = mergeApprovalRecordPart(record?.request, live?.request);
       return {
         id,
         action: asString(live?.action, snapshot?.action || asString(request.action, "approval")),

@@ -90,40 +90,94 @@ function asString(value: unknown, fallback = "") {
   return typeof value === "string" ? value : value === undefined || value === null ? fallback : String(value);
 }
 
+function firstRecord(...values: unknown[]) {
+  for (const value of values) {
+    const record = asRecord(value);
+    if (Object.keys(record).length) return record;
+  }
+  return {};
+}
+
 function clipEvidence(value: unknown, limit = 1200) {
   const text = asString(value).trimEnd();
   if (!text) return "";
   return text.length > limit ? `${text.slice(0, limit)}\n...已截断 ${text.length - limit} 字符` : text;
 }
 
+function writeVerifyEvidence(value: Record<string, unknown>) {
+  if (!Object.keys(value).length) return "";
+  const content = asString(value.content, asString(value.content_preview, asString(value.preview, asString(value.text))));
+  const preview = clipEvidence(content || value.message || value.detail, 900);
+  const target = asString(value.target, asString(value.target_path, asString(value.path)));
+  const source = asString(value.source, "write_file_approval_verify");
+  const chars = value.content_chars !== undefined
+    ? value.content_chars
+    : content
+      ? content.length
+      : value.bytes;
+  return [
+    "  写后复核证据：",
+    `  - 工具：${asString(value.action, "read_file")}`,
+    `  - 来源：${source}`,
+    target ? `  - 路径：${target}` : "",
+    value.status ? `  - 状态：${asString(value.status)}` : "",
+    chars !== undefined ? `  - 字符：${asString(chars)}` : "",
+    preview ? `  - 片段：\n${preview.split("\n").map((line) => `    ${line}`).join("\n")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 function approvalExecutionEvidence(item: AgentLoopApprovalResumeItem) {
   const result = asRecord(item.result);
   const decision = asRecord(item.decision);
   const request = asRecord(item.request);
-  const commandResult = asRecord(
-    decision.run_command
-    || result.run_command
-    || result.command_execution
-    || asRecord(result.approval_decide).run_command
-    || asRecord(asRecord(result.approval_decide).decision).run_command,
+  const approvalDecide = asRecord(result.approval_decide);
+  const approvalDecideDecision = asRecord(approvalDecide.decision);
+  const commandResult = firstRecord(
+    decision.run_command,
+    result.run_command,
+    result.command_execution,
+    approvalDecide.run_command,
+    approvalDecideDecision.run_command,
   );
-  const writeResult = asRecord(
-    decision.write_file
-    || result.write_file
-    || asRecord(result.approval_decide).write_file
-    || asRecord(asRecord(result.approval_decide).decision).write_file,
+  const writeResult = firstRecord(
+    decision.write_file,
+    result.write_file,
+    approvalDecide.write_file,
+    approvalDecideDecision.write_file,
   );
-  const providerProbe = asRecord(
-    decision.provider_probe
-    || result.provider_probe
-    || asRecord(result.approval_decide).provider_probe
-    || asRecord(asRecord(result.approval_decide).decision).provider_probe,
+  const writeVerifyResult = firstRecord(
+    decision.write_file_verify_read_result,
+    decision.write_file_verify_read_error,
+    decision.write_file_verify_read_skipped,
+    decision.write_file_verify_read,
+    decision.write_file_verify,
+    result.write_file_verify_read_result,
+    result.write_file_verify_read_error,
+    result.write_file_verify_read_skipped,
+    result.write_file_verify_read,
+    result.write_file_verify,
+    approvalDecide.write_file_verify_read_result,
+    approvalDecide.write_file_verify_read_error,
+    approvalDecide.write_file_verify_read_skipped,
+    approvalDecide.write_file_verify_read,
+    approvalDecide.write_file_verify,
+    approvalDecideDecision.write_file_verify_read_result,
+    approvalDecideDecision.write_file_verify_read_error,
+    approvalDecideDecision.write_file_verify_read_skipped,
+    approvalDecideDecision.write_file_verify_read,
+    approvalDecideDecision.write_file_verify,
   );
-  const memoryResult = asRecord(
-    decision.memory_management
-    || result.memory_management
-    || asRecord(result.approval_decide).memory_management
-    || asRecord(asRecord(result.approval_decide).decision).memory_management,
+  const providerProbe = firstRecord(
+    decision.provider_probe,
+    result.provider_probe,
+    approvalDecide.provider_probe,
+    approvalDecideDecision.provider_probe,
+  );
+  const memoryResult = firstRecord(
+    decision.memory_management,
+    result.memory_management,
+    approvalDecide.memory_management,
+    approvalDecideDecision.memory_management,
   );
 
   if (Object.keys(commandResult).length) {
@@ -142,7 +196,7 @@ function approvalExecutionEvidence(item: AgentLoopApprovalResumeItem) {
   }
 
   if (Object.keys(writeResult).length) {
-    return [
+    const writeEvidence = [
       "  写入执行证据：",
       `  - 路径：${asString(writeResult.path, item.target || "") || item.target || "未声明"}`,
       writeResult.backup_path ? `  - 备份：${asString(writeResult.backup_path)}` : "",
@@ -150,6 +204,12 @@ function approvalExecutionEvidence(item: AgentLoopApprovalResumeItem) {
       writeResult.bytes !== undefined ? `  - 字节：${asString(writeResult.bytes)}` : "",
       writeResult.message ? `  - 结果：${asString(writeResult.message)}` : "",
     ].filter(Boolean).join("\n");
+    return [writeEvidence, writeVerifyEvidence(writeVerifyResult)].filter(Boolean).join("\n");
+  }
+
+  const verifyEvidence = writeVerifyEvidence(writeVerifyResult);
+  if (verifyEvidence) {
+    return verifyEvidence;
   }
 
   if (Object.keys(providerProbe).length) {

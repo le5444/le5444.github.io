@@ -4,7 +4,7 @@ const THREAD_FILTER_ITEMS: Array<{ key: WorkbenchThreadFilterKey; label: string 
   { key: "all", label: "全部" },
   { key: "pinned", label: "置顶" },
   { key: "project", label: "项目" },
-  { key: "free", label: "自由" },
+  { key: "free", label: "对话" },
 ];
 
 interface WorkbenchThreadFilterBarProps {

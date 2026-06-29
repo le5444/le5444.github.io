@@ -226,6 +226,17 @@ interface ApprovalDecisionSnapshot {
   result: JsonRecord | null;
 }
 
+interface ApprovalResumeEvidenceRecord {
+  id: string;
+  action: string;
+  status: string;
+  target: string;
+  message: string;
+  request: JsonRecord | null;
+  result: JsonRecord | null;
+  decision: JsonRecord | null;
+}
+
 interface TerminalCommandSnapshot {
   command: string;
   status: string;
@@ -691,6 +702,7 @@ type AgentThreadScope = "current_workspace" | "all_workspaces" | "unbound";
 type AgentThreadKindFilter = "all" | "project" | "free" | "pinned";
 type AgentThreadTraceFilter = "all" | AgentThreadTraceKind;
 type AgentHomeSideTab = "context" | "approvals" | "files" | "diff" | "status";
+type AgentHomeSideStatus = "ready" | "pending" | "missing" | "issue" | "active";
 type AgentWorkMode = "chat" | "project";
 type AgentThreadActionDialogKind = "rename" | "archive" | "delete";
 interface AgentThreadActionDialogState {
@@ -811,6 +823,7 @@ interface AgentRunReportArtifact {
   task: string;
   workspaceTitle: string;
   phaseLabel: string;
+  nextAction: string;
   traceCount: number;
   approvalCount: number;
   diffCount: number;
@@ -900,7 +913,7 @@ const WORKBENCH_VIEW_SUBTITLES: Record<WorkbenchView, string> = {
   memory: "长期记忆",
   skills: "能力路由",
   tools: "工具调用",
-  providers: "模型设置",
+  providers: "模型中心",
   workers: "后台任务",
   automation: "规格与钩子",
   writing: "写作助手",
@@ -914,7 +927,7 @@ const AGENT_THREAD_KIND_FILTERS: AgentThreadKindFilter[] = ["all", "project", "f
 const AGENT_THREAD_KIND_LABELS: Record<AgentThreadKindFilter, string> = {
   all: "全部对话",
   project: "项目对话",
-  free: "自由对话",
+  free: "对话模式",
   pinned: "置顶对话",
 };
 const AGENT_THREAD_TRACE_FILTERS: Array<{ id: AgentThreadTraceFilter; label: string }> = [
@@ -950,7 +963,7 @@ const DEFAULT_EDITOR_TABS: WorkbenchEditorTab[] = [
     id: "view:providers",
     kind: "view",
     title: "模型",
-    subtitle: "模型设置",
+    subtitle: "模型中心",
     view: "providers",
     pinned: true,
     openedAt: 0,
@@ -1304,6 +1317,34 @@ function agentThreadListPreview(thread: AgentThreadRecord) {
   const deduped = dedupeThreadPreview(thread.title, normalized);
   const publicPreview = agentThreadSidebarPreviewText(deduped);
   return publicPreview.length > 60 ? `${publicPreview.slice(0, 60)}...` : publicPreview;
+}
+
+function agentLoopTaskFromThread(thread: AgentThreadRecord | null | undefined) {
+  if (!thread) return "";
+  const recentUserMessage = [...thread.messages]
+    .reverse()
+    .find((message) => message.role === "user" && message.title !== "目标任务" && (message.content.trim() || message.attachments.length));
+  const attachmentFallback = recentUserMessage && !recentUserMessage.content.trim() && recentUserMessage.attachments.length
+    ? `根据 ${recentUserMessage.attachments.length} 个附件继续处理当前任务。`
+    : "";
+  const candidates = [
+    recentUserMessage?.content,
+    attachmentFallback,
+    thread.task,
+    thread.summary,
+    isAgentThreadPlaceholderTitle(thread.title) ? "" : thread.title,
+  ];
+  for (const candidate of candidates) {
+    const normalized = stripAgentProtocolForDisplay(candidate || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) continue;
+    const preview = agentThreadSidebarPreviewText(normalized);
+    if (["暂存任务记录", "模型连接验证记录", "模型任务预检记录"].includes(preview)) continue;
+    if (/^(继续对话|空白对话，等待输入|暂无摘要|无任务)$/i.test(preview)) continue;
+    return normalized.length > 900 ? `${normalized.slice(0, 900)}...` : normalized;
+  }
+  return "";
 }
 
 function isAgentThreadDiagnosticRecord(thread: AgentThreadRecord) {
@@ -1666,6 +1707,7 @@ function createAgentRunReportContextAttachment(report: AgentRunReportArtifact): 
     title: `运行报告 · ${report.threadTitle || "对话线程"}`,
     detail: [
       `阶段 ${report.phaseLabel}`,
+      report.nextAction ? `下一步 ${report.nextAction.slice(0, 180)}` : "",
       `工具轨迹 ${report.traceCount}`,
       `审批 ${report.approvalCount}`,
       `变更 ${report.diffCount}`,
@@ -2381,6 +2423,7 @@ function normalizeAgentRunReportArtifact(value: unknown): AgentRunReportArtifact
     task: asString(record.task),
     workspaceTitle: asString(record.workspaceTitle, "未绑定工作区"),
     phaseLabel: asString(record.phaseLabel, "未归纳"),
+    nextAction: asString(record.nextAction),
     traceCount: asNumber(record.traceCount),
     approvalCount: asNumber(record.approvalCount),
     diffCount: asNumber(record.diffCount),
@@ -3725,7 +3768,7 @@ function providerConfigReadiness(settings: ApiSettings) {
     ready: missing.length === 0,
     label: missing.length ? `缺少${missing.join("、")}` : "配置完整",
     detail: missing.length
-      ? `模型配置不完整：${missing.join("、")}。打开模型设置后可直接填写自定义 API。`
+      ? `模型配置不完整：${missing.join("、")}。打开模型中心后可直接填写自定义 API。`
       : "模型配置完整，可以发送给当前模型。",
   };
 }
@@ -3767,7 +3810,7 @@ function providerChatFailureGuidance(detail: string) {
   const text = detail.toLowerCase();
   const lines: string[] = [];
   if (/\b401\b|unauthorized|unauthorised|invalid[_\s-]*api[_\s-]*key|authentication|鉴权|认证|无效.*密钥|密钥.*无效/.test(text)) {
-    lines.push("判断：密钥没有通过认证。请在模型设置里重新填写 API key，并确认服务商要求的格式。");
+    lines.push("判断：密钥没有通过认证。请在模型中心重新填写 API key，并确认服务商要求的格式。");
   } else if (/\b403\b|forbidden|permission|权限|拒绝|quota|额度|billing|余额|白名单/.test(text)) {
     lines.push("判断：服务端拒绝当前密钥或模型权限。请检查额度、模型白名单、账号绑定或换一个可用模型。");
   } else if (/\b404\b|\b405\b|not found|method not allowed/.test(text)) {
@@ -3775,7 +3818,7 @@ function providerChatFailureGuidance(detail: string) {
   } else if (/failed to fetch|network|连接失败|timeout|timed out|超时|cors|证书|tls|proxy|代理/.test(text)) {
     lines.push("判断：模型服务没有连上。请检查 baseURL、代理、防火墙、证书，或确认本地服务已经启动。");
   }
-  lines.push("下一步：点“模型设置”修改配置，保存后点“重试”继续这条消息。");
+  lines.push("下一步：点“模型中心”修改配置，保存后点“重试”继续这条消息。");
   return lines.join("\n");
 }
 
@@ -4431,7 +4474,9 @@ function ProviderRow({ item, onApply }: { item: JsonRecord; onApply?: (item: Jso
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-slate-100">{asString(item.label, asString(item.id, "模型服务"))}</div>
-          <div className="mt-1 truncate text-[10px] text-slate-500">{asString(item.model_id)} · {asString(item.provider_label, asString(item.provider))}</div>
+          <div className="mt-1 truncate text-[10px] text-slate-500" title={asString(item.model_id)}>
+            端点模板 · {asString(item.provider_label, asString(item.provider))}
+          </div>
           <PathLine value={asString(item.api_url)} />
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
@@ -4596,12 +4641,34 @@ export function AgentControlCenter({
   });
   const agentLoopRunBusyRef = useRef(false);
   const agentLoopResumeInFlightRef = useRef<Set<string>>(new Set());
+  const approvalResumeEvidenceRef = useRef<Record<string, ApprovalResumeEvidenceRecord>>({});
   const emittedAgentModelWorkerEventsRef = useRef<Set<string>>(new Set());
   const agentModelWorkerStartedAtRef = useRef<Record<string, number>>({});
   const agentModelWorkerRawOutputRef = useRef<Record<string, string>>({});
   const agentChatAbortRef = useRef<AbortController | null>(null);
   const agentHomeMessagesEndRef = useRef<HTMLDivElement | null>(null);
   const agentWorkbenchMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const rememberApprovalResumeEvidence = (approvalId: string, record: Partial<ApprovalResumeEvidenceRecord>) => {
+    const previous = approvalResumeEvidenceRef.current[approvalId];
+    const nextDecision = record.decision === undefined
+      ? previous?.decision ?? null
+      : record.decision === null
+        ? null
+        : { ...asRecord(previous?.decision), ...asRecord(record.decision) };
+    approvalResumeEvidenceRef.current = {
+      ...approvalResumeEvidenceRef.current,
+      [approvalId]: {
+        id: approvalId,
+        action: record.action ?? previous?.action ?? "approval",
+        status: record.status ?? previous?.status ?? "decided",
+        target: record.target ?? previous?.target ?? "",
+        message: record.message ?? previous?.message ?? "",
+        request: record.request === undefined ? previous?.request ?? null : record.request,
+        result: record.result === undefined ? previous?.result ?? null : record.result,
+        decision: nextDecision,
+      },
+    };
+  };
   const [commandPlanFeedback, setCommandPlanFeedback] = useState("");
   const [commandApproval, setCommandApproval] = useState<CommandApprovalSnapshot>({
     status: "",
@@ -4893,11 +4960,11 @@ export function AgentControlCenter({
   const currentModeLabel = projectModeActive ? "项目模式" : "对话模式";
   const currentModeDetail = projectModeActive
     ? activeProjectWorkspace
-      ? `固定工作区：${activeProjectWorkspace.title} · ${activeProjectWorkspace.files} 个文件`
+      ? `项目模式：绑定「${activeProjectWorkspace.title}」，文件、Diff、审批和运行轨迹会关联到同一工作区。`
       : activeThread?.workspaceTitle
-        ? `固定工作区：${activeThread.workspaceTitle}`
-        : "项目模式需要先选择或创建工作区。"
-    : "不强制绑定固定目录；可直接对话、挂附件、按需生成计划。";
+        ? `项目模式：绑定「${activeThread.workspaceTitle}」，按项目上下文执行任务。`
+        : "项目模式需要先选择或创建工作区，并绑定本机文件夹。"
+    : "对话模式：不绑定目录；可直接聊天、传文件或图片，按需挂上下文。";
   const filteredAgentThreads = useMemo(() => {
     const normalizedSearch = workbenchLayout.agentThreadSearch.trim().toLowerCase();
     const includeDiagnosticThreads = Boolean(normalizedSearch) || showArchivedThreads;
@@ -6917,6 +6984,10 @@ export function AgentControlCenter({
         ? `用户在审批复核台拒绝 ${action} 审批。`
         : `用户在审批复核台执行已排队的 ${executableLabel} 审批。`,
     };
+    const approvalTarget = asString(
+      selectedApprovalSummary?.target,
+      asString(selectedApprovalRequest.path, asString(selectedApprovalRequest.command, executableLabel)),
+    );
     const startedAt = Date.now();
     setApprovalDecision({
       approvalId,
@@ -6940,6 +7011,21 @@ export function AgentControlCenter({
         at: Date.now(),
         request,
         result,
+      });
+      rememberApprovalResumeEvidence(approvalId, {
+        action,
+        status: rawStatus,
+        target: approvalTarget,
+        message: detail,
+        request,
+        result: { ...result },
+        decision: {
+          ...decisionResult,
+          action,
+          status: rawStatus,
+          target: approvalTarget,
+          message: detail,
+        },
       });
       const attachment = createAgentThreadContextAttachment({
         kind: "approval",
@@ -7078,6 +7164,33 @@ export function AgentControlCenter({
                 result: verifyResult,
                 content: verifyContent,
               });
+              rememberApprovalResumeEvidence(approvalId, {
+                action,
+                status: verifyStatus === "ok" ? rawStatus : verifyStatus,
+                target: verifyTarget,
+                message: verifyDetail,
+                request,
+                result: {
+                  ...result,
+                  write_file_verify_read_result: {
+                    ...verifyResult,
+                    action: "read_file",
+                    source: "write_file_approval_verify",
+                    approval_id: approvalId,
+                    target_path: verifyTarget,
+                    content_chars: verifyContent.length,
+                    content_preview: previewText,
+                    detail: verifyDetail,
+                  },
+                },
+                decision: {
+                  ...decisionResult,
+                  action,
+                  status: rawStatus,
+                  target: approvalTarget,
+                  message: detail,
+                },
+              });
               appendRuntimeLog({
                 channel: "gateway",
                 title: "写入后 read_file 复核完成",
@@ -7129,6 +7242,31 @@ export function AgentControlCenter({
                   ? { ...hunk, approvalId, reviewStatus: "failed", reviewDetail: verifyDetail, reviewResult: null }
                   : hunk
               )));
+              rememberApprovalResumeEvidence(approvalId, {
+                action,
+                status: "failed",
+                target: targetPath,
+                message: verifyDetail,
+                request,
+                result: {
+                  ...result,
+                  write_file_verify_read_error: {
+                    action: "read_file",
+                    source: "write_file_approval_verify",
+                    approval_id: approvalId,
+                    target_path: targetPath,
+                    status: "error",
+                    detail: verifyDetail,
+                  },
+                },
+                decision: {
+                  ...decisionResult,
+                  action,
+                  status: rawStatus,
+                  target: approvalTarget,
+                  message: detail,
+                },
+              });
               appendRuntimeLog({
                 channel: "gateway",
                 title: "写入后 read_file 复核失败",
@@ -7157,6 +7295,31 @@ export function AgentControlCenter({
                 ? { ...hunk, approvalId, reviewStatus: "skipped", reviewDetail: verifyDetail, reviewResult: null }
                 : hunk
             )));
+            rememberApprovalResumeEvidence(approvalId, {
+              action,
+              status: rawStatus,
+              target: targetPath,
+              message: verifyDetail,
+              request,
+              result: {
+                ...result,
+                write_file_verify_read_skipped: {
+                  action: "read_file",
+                  source: "write_file_approval_verify",
+                  approval_id: approvalId,
+                  target_path: targetPath,
+                  status: "blocked",
+                  detail: verifyDetail,
+                },
+              },
+              decision: {
+                ...decisionResult,
+                action,
+                status: rawStatus,
+                target: approvalTarget,
+                message: detail,
+              },
+            });
             appendRuntimeLog({
               channel: "gateway",
               title: "跳过写入后复核",
@@ -7703,7 +7866,7 @@ export function AgentControlCenter({
     : !providerDraftEndpointReady
       ? "请先填写 API endpoint。"
       : !providerDraftKeyReady
-        ? "这个端点需要 API key；可在模型中心直接粘贴，或到设置里保存密钥。"
+        ? "这个端点需要 API key；可在模型中心直接粘贴并保存。"
       : !providerProbeGateOpen
         ? "可点击检查；如果 Gateway 未用 --execute-provider 启动，会返回明确的审批/闸门提示。"
         : "闸门就绪：点击后会发送 execute=true 探测 /models，仍不调用模型生成。";
@@ -7915,6 +8078,7 @@ export function AgentControlCenter({
     .slice()
     .reverse()
     .find((message) => message.role === "user" && (message.content.trim() || message.attachments.length)) || null;
+  const activeAgentLoopTask = agentLoopTaskFromThread(activeThread);
   const modelOfflinePublicDetail = "本地模型服务未连接，消息会先保存到线程。";
   const modelSendBlockedReason = !apiReady
       ? providerReadiness.detail
@@ -9968,7 +10132,9 @@ export function AgentControlCenter({
   };
 
   const runDeepAgentLoop = async (taskOverride?: string, targetThread: AgentThreadRecord | null = activeThread) => {
-    const task = (taskOverride !== undefined ? taskOverride : threadComposer.trim() || commandTask.trim() || targetThread?.task || activeThread?.task || "").trim();
+    const loopThread = targetThread || activeThread;
+    const fallbackTask = agentLoopTaskFromThread(loopThread);
+    const task = (taskOverride !== undefined ? taskOverride : threadComposer.trim() || commandTask.trim() || fallbackTask).trim();
     if (!task) {
       setAgentLoopStatus({ status: "blocked", phase: "intake", detail: "请先输入任务或选中一个已有线程。", at: Date.now() });
       return;
@@ -10001,7 +10167,6 @@ export function AgentControlCenter({
     }
     agentLoopRunBusyRef.current = true;
     const loopRef = `agent-loop-${uid()}`;
-    const loopThread = targetThread || activeThread;
     const loopWorkspaceId = loopThread?.workspaceId || activeWorkspace?.book.id || "";
     const loopWorkspaceTitle = loopThread?.workspaceTitle || activeWorkspace?.title || "";
     const loopWorkspaceDomain = loopThread?.workspaceDomain || activeWorkspace?.domain || "";
@@ -10440,11 +10605,28 @@ export function AgentControlCenter({
       return;
     }
     agentLoopResumeInFlightRef.current.add(resumeKey);
+    const approvalResumeRecords = approvalRecords.map((record) => {
+      const approvalId = asString(record.id || asRecord(record.request).approval_id || asRecord(record.result).approval_id || asRecord(record.decision).approval_id);
+      const memory = approvalId ? approvalResumeEvidenceRef.current[approvalId] : null;
+      if (!memory) return record;
+      return {
+        ...record,
+        request: memory.request ?? record.request,
+        result: {
+          ...asRecord(record.result),
+          ...(memory.result || {}),
+        },
+        decision: {
+          ...asRecord(record.decision),
+          ...(memory.decision || {}),
+        },
+      };
+    });
     const resumeBundle = buildAgentLoopResumePromptBundle({
       resume,
       liveApprovals: Array.from(approvalSummaryById.values()),
       snapshots: targetThread.approvalSnapshots,
-      records: approvalRecords,
+      records: approvalResumeRecords,
     });
     appendRuntimeLog({
       channel: "workers",
@@ -10946,7 +11128,7 @@ export function AgentControlCenter({
     const task = [
       composerTask || (attachments.length ? "请根据已附加的图片/文件上下文继续分析。" : ""),
       attachmentSummary ? `\n\n[线程附件]\n${attachmentSummary}` : "",
-    ].filter(Boolean).join("") || commandTask.trim() || activeThread?.task || "";
+    ].filter(Boolean).join("") || commandTask.trim() || activeAgentLoopTask || "";
     if (!task.trim()) return;
     if (composerTask || attachments.length) {
       setThreadComposer("");
@@ -12354,7 +12536,7 @@ export function AgentControlCenter({
       `生成时间：${now}`,
       "",
       "## Workbench 架构",
-      "- Header：品牌、工作区、模型设置、布局 Part 控制。",
+      "- Header：品牌、工作区、模型中心、布局 Part 控制。",
       "- Activity Bar：AI 工作台、工作区、记忆、Skills、工具、后台任务等顶层 View Container。",
       "- 主侧边栏：资源管理器、Agent 线程、工作区文件树、线程空间。",
       "- 主工作区：Agent 运行线程、命令中心、Specs 控制面、Memory / Provider / Worker 管理器。",
@@ -12459,7 +12641,7 @@ export function AgentControlCenter({
       diff,
     };
   });
-  const agentModelTaskReady = Boolean((threadComposer.trim() || commandTask.trim() || activeThread?.task || "").trim() || threadComposerAttachments.length);
+  const agentModelTaskReady = Boolean((threadComposer.trim() || commandTask.trim() || activeAgentLoopTask).trim() || threadComposerAttachments.length);
   const activeWorkspaceFiles = activeProjectWorkspace?.book.workspace.files || [];
   const normalizedExplorerSearch = workspaceExplorerSearch.trim().toLowerCase();
   const workspaceFileCategories = activeProjectWorkspace?.book.workspace.categories?.length
@@ -14198,6 +14380,7 @@ export function AgentControlCenter({
       task: thread.task,
       workspaceTitle: reportWorkspaceScope.workspaceTitle,
       phaseLabel: agentThreadRunbook.phaseLabel,
+      nextAction: agentThreadRunbook.nextAction || "继续对话，或运行 Agent Loop 查看工具轨迹。",
       traceCount: agentThreadTraceCounts.all,
       approvalCount: activeThreadLinkedApprovalRows.length,
       diffCount: changeFileRows.length,
@@ -14828,11 +15011,11 @@ export function AgentControlCenter({
     {
       id: "action-open-model-settings",
       kind: "action",
-      label: "打开模型设置",
+      label: "打开模型中心",
       command: "/model.settings",
-      detail: "打开轻量模型设置弹窗，直接填 key、baseURL 和模型 ID",
+      detail: "打开模型中心弹窗，直接填 key、baseURL 和模型 ID",
       status: modelRuntimeReady ? "ready" : providerRuntimeProbeFailure ? "error" : "setup-needed",
-      keywords: "model settings api key baseURL 模型设置 key 配置",
+      keywords: "model settings api key baseURL 模型中心 key 配置",
       run: openQuickModelSettings,
     },
     {
@@ -16040,6 +16223,7 @@ export function AgentControlCenter({
                       icon={<LinkIcon className="h-3.5 w-3.5" />}
                       onClick={() => linkApprovalToActiveThread()}
                       disabled={!activeThread || !selectedApprovalSummary || selectedApprovalLinkedToActiveThread}
+                      testId="bottom-approval-link-active-thread"
                     />
                   </div>
                   <div className="rounded border border-slate-800 bg-slate-950 px-2 py-2">
@@ -16088,12 +16272,14 @@ export function AgentControlCenter({
                       icon={<XCircle className="h-3.5 w-3.5" />}
                       onClick={() => void decideSelectedApproval("reject")}
                       disabled={!selectedApprovalCanReject}
+                      testId="bottom-approval-reject-button"
                     />
                     <ActionButton
                       label={approvalDecision.status === "running" && approvalDecision.decision === "execute" ? "执行中" : `执行 ${selectedApprovalExecutableLabel || "审批"}`}
                       icon={<CheckCircle2 className="h-3.5 w-3.5" />}
                       onClick={() => void decideSelectedApproval("execute")}
                       disabled={!selectedApprovalCanExecute}
+                      testId="bottom-approval-execute-button"
                     />
                   </div>
                   <div className="rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
@@ -16167,15 +16353,15 @@ export function AgentControlCenter({
       const status = asString(item.status, "pending").toLowerCase();
       return !["executed", "rejected", "completed", "closed"].includes(status);
     });
-    const agentRunDisabled = !modelRuntimeReady || agentLoopStatus.status === "running" || (!threadComposer.trim() && !commandTask.trim() && !activeThread?.task);
+    const agentRunDisabled = !modelRuntimeReady || agentLoopStatus.status === "running" || (!threadComposer.trim() && !commandTask.trim() && !activeAgentLoopTask);
     const agentRunTitle = modelRuntimeReady
       ? agentLoopStatus.status === "running"
         ? "任务流正在执行。"
         : "执行任务流：规划、上下文、工具、结果回灌。"
       : "先配置模型才能执行任务。";
     const showTaskStripRun = modelRuntimeReady
-      && (agentLoopStatus.status === "running" || Boolean(threadComposer.trim() || commandTask.trim() || activeThread?.task));
-    const workbenchTaskTitle = (commandTask.trim() || activeThread?.task || threadComposer.trim() || "等待任务").trim();
+      && (agentLoopStatus.status === "running" || Boolean(threadComposer.trim() || commandTask.trim() || activeAgentLoopTask));
+    const workbenchTaskTitle = (commandTask.trim() || activeAgentLoopTask || threadComposer.trim() || "等待任务").trim();
     const workbenchTaskStatus = agentLoopStatus.status === "running"
       ? "执行中"
       : activeThread?.agentLoopResume?.status === "approval_decided"
@@ -16213,7 +16399,7 @@ export function AgentControlCenter({
       },
       {
         id: "mode",
-        label: projectModeActive ? "项目对话" : "自由对话",
+        label: projectModeActive ? "项目对话" : "对话模式",
         title: currentModeDetail,
         icon: projectModeActive ? <FolderKanban className="h-3.5 w-3.5" /> : <MessageSquare className="h-3.5 w-3.5" />,
         tone: projectModeActive ? "is-project" : "is-neutral",
@@ -16328,8 +16514,8 @@ export function AgentControlCenter({
       },
       {
         id: "mode",
-        label: projectModeActive ? "自由对话" : "项目对话",
-        detail: projectModeActive ? "不绑定目录，先聊天" : activeWorkspace ? `绑定 ${workbenchProjectLabel}` : "先选择项目后可启用",
+        label: projectModeActive ? "对话模式" : "项目对话",
+        detail: projectModeActive ? "不绑定目录，只保留会话和附件上下文" : activeWorkspace ? `绑定 ${workbenchProjectLabel}` : "先选择项目后可启用",
         icon: projectModeActive ? <MessageSquare className="h-4 w-4" /> : <FolderKanban className="h-4 w-4" />,
         tone: "is-mode",
         disabled: !projectModeActive && !activeWorkspace,
@@ -16496,7 +16682,7 @@ export function AgentControlCenter({
                         <div className="mt-1 max-w-xl text-[12px] leading-relaxed text-slate-500">
                           {projectModeActive
                             ? `当前绑定「${workbenchProjectLabel}」。可以对话、看文件、审变更，也可以先让 AI 梳理下一步。`
-                            : "自由对话不强制绑定目录。可以直接聊天，也可以传文件、图片，再把它升级成项目对话。"}
+                            : "对话模式不绑定目录。可以直接聊天、传文件或图片；需要读写项目时再切到项目模式。"}
                         </div>
                       </div>
                     </div>
@@ -16524,7 +16710,7 @@ export function AgentControlCenter({
                       <span aria-hidden="true">·</span>
                       <span className="truncate">{publicModelStateLabel}</span>
                       <span aria-hidden="true">·</span>
-                      <span className="truncate">{projectModeActive ? `${workbenchProjectLabel} · ${workbenchRootStatus}` : "自由模式 · 不绑定目录"}</span>
+                      <span className="truncate">{projectModeActive ? `${workbenchProjectLabel} · ${workbenchRootStatus}` : "对话模式 · 不绑定目录"}</span>
                     </div>
                   </div>
                 </div>
@@ -16616,7 +16802,7 @@ export function AgentControlCenter({
                       <MoreHorizontal className="h-3.5 w-3.5" />
                     </summary>
                     <div className="codex-composer-menu absolute right-0 bottom-10 z-50 grid w-40 gap-1 rounded-md border border-slate-800 bg-[#0f141c] p-1.5 shadow-xl shadow-black/30">
-                      <ActionButton label="模型设置" icon={<Server className="h-3.5 w-3.5" />} onClick={openWorkbenchModelPanel} title="查看模型状态" />
+                      <ActionButton label="模型中心" icon={<Server className="h-3.5 w-3.5" />} onClick={openWorkbenchModelPanel} title="查看模型状态" />
                       <ActionButton label="计划" icon={<ListChecks className="h-3.5 w-3.5" />} onClick={() => void sendAgentThreadMessage(true)} disabled={(!threadComposer.trim() && !threadComposerAttachments.length) || commandDraft.status === "running"} title="生成计划" />
                       <ActionButton label="执行任务" icon={<Cpu className="h-3.5 w-3.5" />} onClick={() => void runDeepAgentLoop()} disabled={agentRunDisabled} title={agentRunTitle} />
                     </div>
@@ -16638,7 +16824,7 @@ export function AgentControlCenter({
                     onClick={openWorkbenchModelPanel}
                     className="shrink-0 rounded border border-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-cyan-500/40 hover:text-cyan-100"
                   >
-                    模型设置
+                    模型中心
                   </button>
                 </div>
               )}
@@ -18913,7 +19099,7 @@ export function AgentControlCenter({
                     </div>
                   </div>
                 );
-              }) : <EmptyBlock text="还没有模型发现历史；在设置里点击获取模型列表，或在模型中心运行实时模型列表。" />}
+              }) : <EmptyBlock text="还没有模型发现历史；在模型中心点击获取模型列表，或运行实时模型列表。" />}
             </div>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
@@ -19460,7 +19646,8 @@ export function AgentControlCenter({
       });
       const agentLoopResume = activeThread?.agentLoopResume;
       const agentLoopCanResume = Boolean(agentLoopResume?.status === "approval_decided" && modelRuntimeReady && agentLoopStatus.status !== "running");
-      const homePolicyUses = asArray(asRecord(buildContextPackPayload(commandTask || activeThread?.task || "current", 6).thread_context_policy).uses)
+      const homeAgentLoopTaskReady = Boolean((threadComposer.trim() || commandTask.trim() || activeAgentLoopTask).trim());
+      const homePolicyUses = asArray(asRecord(buildContextPackPayload(commandTask || activeAgentLoopTask || "current", 6).thread_context_policy).uses)
         .map((item) => String(item))
         .filter(Boolean);
       const homeModelLabel = settings.modelId || settings.modelName || "模型未设置";
@@ -19594,10 +19781,10 @@ export function AgentControlCenter({
       ];
       const homeThreadContextLabel = projectModeActive
         ? `${homeProjectLabel} · ${homeRootStatus}`
-        : "自由模式 · 不绑定目录";
+        : "对话模式 · 不绑定目录";
       const homeThreadContextDetail = projectModeActive
         ? homeRootPath || "当前项目还没有绑定本机目录，先使用内置文件树。"
-        : "可随时切到项目模式";
+        : "会话、附件和图片会进入当前线程；不会扫描或绑定项目目录。";
       const homeSendContextHint = projectModeActive
         ? `上下文：${selectedWorkspaceScanIndex ? `${selectedWorkspaceScanIndex.fileCount} 文件 / ${selectedWorkspaceScanIndex.dirCount} 目录` : homeRootPath ? homeRootModeLabel : "内置文件树"}`
         : "上下文：会话 + 附件";
@@ -19668,7 +19855,7 @@ export function AgentControlCenter({
         },
       ];
       const homeComposerMetaVisible = Boolean(threadComposerAttachments.length || agentChatBusy);
-      const homeThreadHeaderContext = projectModeActive ? homeProjectLabel : "自由对话";
+      const homeThreadHeaderContext = projectModeActive ? homeProjectLabel : "对话模式";
       const homeHeaderModeStatus = projectModeActive
         ? homeRootPath
           ? selectedWorkspaceScanIndex
@@ -19680,12 +19867,12 @@ export function AgentControlCenter({
         ? homeRootPath
           ? `${homeProjectLabel} · ${homeRootPath} · ${homeRootStatus}`
           : `${homeProjectLabel} · 项目模式建议绑定本机文件夹`
-        : "对话模式不强制绑定项目目录；可直接聊天、传文件或图片";
+        : "对话模式不绑定项目目录；可直接聊天、传文件或图片，不会扫描本地项目。";
       const focusComposer = () => window.requestAnimationFrame(() => threadComposerRef.current?.focus());
       const homeStarterActions: WorkbenchChatStarterAction[] = [
         ...(!modelRuntimeReady ? [{
           id: "config-model",
-          label: "配置模型",
+          label: "模型中心",
           detail: "填写 baseURL、API key 和模型 ID",
           icon: <Server className="h-4 w-4" />,
           tone: "is-model",
@@ -19694,7 +19881,7 @@ export function AgentControlCenter({
         {
           id: "first-message",
           label: projectModeActive ? "让 AI 看项目" : "直接发任务",
-          detail: projectModeActive ? homeRootScanDetail : "从一句话开始，支持继续追问",
+          detail: projectModeActive ? homeRootScanDetail : "不绑定目录，先把任务说清楚",
           icon: projectModeActive ? <FolderKanban className="h-4 w-4" /> : <ListChecks className="h-4 w-4" />,
           tone: projectModeActive ? "is-project" : "is-chat",
           onClick: () => {
@@ -19718,8 +19905,8 @@ export function AgentControlCenter({
         },
         {
           id: "mode",
-          label: projectModeActive ? "切到自由对话" : "切到项目模式",
-          detail: projectModeActive ? "不绑定目录，先聊天" : activeWorkspace ? `绑定 ${homeProjectLabel}` : "先选择项目后可启用",
+          label: projectModeActive ? "切到对话模式" : "切到项目模式",
+          detail: projectModeActive ? "不绑定目录，只保留会话和附件上下文" : activeWorkspace ? `绑定 ${homeProjectLabel} 和本机目录链路` : "先选择项目后可启用",
           icon: projectModeActive ? <MessageSquare className="h-4 w-4" /> : <FolderKanban className="h-4 w-4" />,
           tone: "is-mode",
           disabled: !projectModeActive && !activeWorkspace,
@@ -19738,12 +19925,44 @@ export function AgentControlCenter({
       const homeContextLeft = Math.max(0, homeContextBudget - homeContextUsed);
       const homeContextLeftPercent = homeContextBudget ? (homeContextLeft / homeContextBudget) * 100 : 100;
       const activeHomeSideTab: AgentHomeSideTab = agentHomeSideTab;
-      const homeSideTabs: Array<{ id: AgentHomeSideTab; label: string; shortLabel: string; icon: React.ReactNode; count: number; title?: string }> = [
-        { id: "context", label: "上下文", shortLabel: "上下文", icon: <Database className="h-3.5 w-3.5" />, count: contextAttachments.length, title: "上下文：发送给 AI 的材料" },
-        { id: "files", label: "文件", shortLabel: "文件", icon: <FileText className="h-3.5 w-3.5" />, count: filteredExplorerFileCount, title: "项目文件：目录、预览、挂入上下文" },
-        { id: "diff", label: "变更", shortLabel: "变更", icon: <GitBranch className="h-3.5 w-3.5" />, count: changeFileRows.length, title: "变更 / Diff：审查 AI 修改" },
-        { id: "approvals", label: "审批", shortLabel: "审批", icon: <ShieldCheck className="h-3.5 w-3.5" />, count: activeThreadLinkedApprovalRows.length, title: "审批：确认高风险动作" },
-        { id: "status", label: "状态", shortLabel: "状态", icon: <Activity className="h-3.5 w-3.5" />, count: homeTraceTabCount, title: "状态：运行轨迹和日志" },
+      const homeSideStatusLabels: Record<AgentHomeSideStatus, string> = {
+        ready: "就绪",
+        pending: "待处理",
+        missing: "待补齐",
+        issue: "有问题",
+        active: "运行中",
+      };
+      const contextSideStatus: AgentHomeSideStatus = homeContextLeftPercent <= 10
+        ? "issue"
+        : contextAttachments.length
+          ? "ready"
+          : "missing";
+      const filesSideStatus: AgentHomeSideStatus = workspaceScanPreview.status === "running"
+        ? "active"
+        : projectModeActive && !homeRootPath
+          ? "missing"
+          : projectModeActive && homeRootPath && !selectedWorkspaceScanIndex
+            ? "pending"
+            : "ready";
+      const diffSideStatus: AgentHomeSideStatus = changeFileRows.some((row) => row.pending > 0)
+        ? "pending"
+        : changeFileRows.length
+          ? "ready"
+          : "missing";
+      const approvalSideStatus: AgentHomeSideStatus = activeThreadLinkedApprovalRows.length ? "pending" : "ready";
+      const statusSideStatus: AgentHomeSideStatus = problemLogRows.length
+        ? "issue"
+        : agentLoopResume && agentLoopResume.status !== "resumed"
+          ? "pending"
+          : terminalLogRows.some((entry) => ACTIVE_LOG_STATUSES.has(entry.status))
+            ? "active"
+            : "ready";
+      const homeSideTabs: Array<{ id: AgentHomeSideTab; label: string; shortLabel: string; icon: React.ReactNode; count: number; status: AgentHomeSideStatus; title?: string }> = [
+        { id: "context", label: "上下文", shortLabel: "上下文", icon: <Database className="h-3.5 w-3.5" />, count: contextAttachments.length, status: contextSideStatus, title: "上下文：发送给 AI 的材料" },
+        { id: "files", label: "文件", shortLabel: "文件", icon: <FileText className="h-3.5 w-3.5" />, count: filteredExplorerFileCount, status: filesSideStatus, title: "项目文件：目录、预览、挂入上下文" },
+        { id: "diff", label: "变更", shortLabel: "变更", icon: <GitBranch className="h-3.5 w-3.5" />, count: changeFileRows.length, status: diffSideStatus, title: "变更 / Diff：审查 AI 修改" },
+        { id: "approvals", label: "审批", shortLabel: "审批", icon: <ShieldCheck className="h-3.5 w-3.5" />, count: activeThreadLinkedApprovalRows.length, status: approvalSideStatus, title: "审批：确认高风险动作" },
+        { id: "status", label: "状态", shortLabel: "状态", icon: <Activity className="h-3.5 w-3.5" />, count: homeTraceTabCount, status: statusSideStatus, title: "状态：运行轨迹和日志" },
       ];
       const activeHomeSideLabel = homeSideTabs.find((tab) => tab.id === activeHomeSideTab)?.label || "上下文";
       const activeHomeSideEyebrow = activeHomeSideTab === "context"
@@ -19790,6 +20009,91 @@ export function AgentControlCenter({
                   { label: "阶段", value: agentThreadRunbook.phaseLabel, tone: agentThreadRunbook.blockedBy.length ? "text-amber-300" : "text-cyan-200" },
                   { label: "日志", value: `${terminalLogRows.length}`, tone: terminalLogRows.length ? "text-cyan-200" : "text-slate-500" },
                 ];
+      const activeHomeSideNextStep = activeHomeSideTab === "context"
+        ? (contextAttachments.length ? "下一步：确认这些材料会随下一轮消息进入模型上下文。" : "下一步：先发送消息、上传文件，或把文件预览挂入上下文。")
+        : activeHomeSideTab === "files"
+          ? (projectModeActive
+              ? (homeRootPath ? "下一步：扫描目录、选择文件并读取预览，再挂入上下文。" : "下一步：先绑定本机项目目录，再扫描文件索引。")
+              : "下一步：需要读写本地项目时切到项目模式；对话模式只处理附件。")
+          : activeHomeSideTab === "diff"
+            ? (changeFileRows.length ? "下一步：打开变更，逐个接受或拒绝 hunk，再生成写入审批。" : "下一步：让 AI 生成修改草案，或从文件预览创建 Diff。")
+          : activeHomeSideTab === "approvals"
+            ? (activeThreadLinkedApprovalRows.length ? "下一步：打开审批详情，确认执行或拒绝高风险动作。" : "下一步：写文件、命令、模型探针等高风险动作会先出现在这里。")
+            : (agentThreadRunbook.nextAction || "下一步：继续对话，或运行 Agent Loop 查看工具轨迹。");
+      const firstApprovalRow = activeThreadLinkedApprovalRows[0] || null;
+      const activeHomeSidePrimaryAction = activeHomeSideTab === "context"
+        ? {
+            label: selectedExplorerFile ? "挂入文件" : "挂入流程",
+            detail: selectedExplorerFile ? "把当前文件摘要加入线程上下文" : "把当前 Runbook 加入线程上下文",
+            icon: selectedExplorerFile ? <FileText className="h-3.5 w-3.5" /> : <GitBranch className="h-3.5 w-3.5" />,
+            disabled: selectedExplorerFile ? !activeThread || !selectedExplorerFile : !activeThread,
+            onClick: selectedExplorerFile ? attachSelectedFileToThread : attachRunbookToThread,
+          }
+        : activeHomeSideTab === "files"
+          ? {
+              label: projectModeActive && !homeRootPath ? "绑定目录" : projectModeActive && homeRootPath && !selectedWorkspaceScanIndex ? "扫描目录" : "挂入文件",
+              detail: projectModeActive && !homeRootPath
+                ? "选择本机项目文件夹"
+                : projectModeActive && homeRootPath && !selectedWorkspaceScanIndex
+                  ? "通过 Gateway 只读扫描目录索引"
+                  : selectedExplorerFile
+                    ? "把选中文件加入线程上下文"
+                    : "先从文件树选择一个文件",
+              icon: projectModeActive && !homeRootPath ? <HardDrive className="h-3.5 w-3.5" /> : projectModeActive && homeRootPath && !selectedWorkspaceScanIndex ? <Search className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />,
+              disabled: projectModeActive && !homeRootPath
+                ? !selectedWorkspaceManagerRow
+                : projectModeActive && homeRootPath && !selectedWorkspaceScanIndex
+                  ? !workspaceScanCanExecute || workspaceScanPreview.status === "running"
+                  : !activeThread || !selectedExplorerFile,
+              onClick: projectModeActive && !homeRootPath
+                ? openProjectRootBinderFromComposer
+                : projectModeActive && homeRootPath && !selectedWorkspaceScanIndex
+                  ? () => void runWorkspaceRootScanPreview(true)
+                  : attachSelectedFileToThread,
+            }
+          : activeHomeSideTab === "diff"
+            ? {
+                label: acceptedCommandHunkCount ? "生成审批" : "打开变更",
+                detail: acceptedCommandHunkCount ? "把已接受 hunk 转成写入审批" : selectedChangeFile ? "进入 Diff 标签审查 hunk" : "等待 AI 生成修改草案",
+                icon: acceptedCommandHunkCount ? <ShieldCheck className="h-3.5 w-3.5" /> : <GitBranch className="h-3.5 w-3.5" />,
+                disabled: acceptedCommandHunkCount
+                  ? !state.online || commandApproval.status === "running"
+                  : !selectedChangeFile,
+                onClick: acceptedCommandHunkCount
+                  ? () => void runCommandWriteApproval()
+                  : () => selectedChangeFile && activateEditorTab(diffEditorTab(selectedChangeFile)),
+              }
+            : activeHomeSideTab === "approvals"
+              ? {
+                  label: firstApprovalRow ? "打开审批" : "打开队列",
+                  detail: firstApprovalRow ? "查看第一条待处理审批" : "打开底部审批面板",
+                  icon: <ShieldCheck className="h-3.5 w-3.5" />,
+                  disabled: false,
+                  onClick: () => {
+                    if (firstApprovalRow) {
+                      setSelectedApprovalId(asString(firstApprovalRow.id));
+                      activateEditorTab(approvalEditorTab(firstApprovalRow));
+                    }
+                    setBottomPanelTab("approvals");
+                  },
+                }
+              : {
+                  label: agentLoopCanResume ? "继续 Agent Loop" : agentLoopStatus.status === "running" ? "运行中" : "运行 Agent Loop",
+                  detail: agentLoopCanResume
+                    ? "把审批结果回灌原任务继续跑"
+                    : agentLoopStatus.status === "running"
+                      ? "正在执行 plan / context / tool / result 链路"
+                      : !modelRuntimeReady
+                        ? "先配置模型；点击会打开模型中心"
+                        : homeAgentLoopTaskReady
+                          ? "按当前任务启动 plan / context / tool / result 链路"
+                          : "先输入任务或选中线程",
+                  icon: agentLoopCanResume ? <Play className="h-3.5 w-3.5" /> : agentLoopStatus.status === "running" ? <Activity className="h-3.5 w-3.5" /> : <Cpu className="h-3.5 w-3.5" />,
+                  disabled: agentLoopStatus.status === "running",
+                  onClick: agentLoopCanResume
+                    ? () => void resumeAgentLoopAfterApproval()
+                    : () => void runDeepAgentLoop(),
+                };
       const renderHomeSidePanel = () => {
         if (activeHomeSideTab === "approvals") {
           return (
@@ -19800,6 +20104,7 @@ export function AgentControlCenter({
                   <button
                     key={`home-approval-${id}`}
                     type="button"
+                    data-testid={`home-approval-row-${id}`}
                     onClick={() => {
                       setSelectedApprovalId(id);
                       setBottomPanelTab("approvals");
@@ -20157,11 +20462,39 @@ export function AgentControlCenter({
                   {!changeFileRows.length && <EmptyBlock text="暂无变更草案" />}
                 </div>
                 {selectedChangeFile && (
-                  <div className="mt-2 grid grid-cols-3 gap-1.5">
-                    <MiniStat label="接受" value={`${selectedChangeFile.accepted}`} tone={selectedChangeFile.accepted ? "text-emerald-300" : "text-slate-300"} />
-                    <MiniStat label="拒绝" value={`${selectedChangeFile.rejected}`} tone={selectedChangeFile.rejected ? "text-rose-300" : "text-slate-300"} />
-                    <MiniStat label="待审" value={`${selectedChangeFile.pending}`} tone={selectedChangeFile.pending ? "text-amber-300" : "text-slate-300"} />
-                  </div>
+                  <>
+                    <div className="mt-2 grid grid-cols-3 gap-1.5">
+                      <MiniStat label="接受" value={`${selectedChangeFile.accepted}`} tone={selectedChangeFile.accepted ? "text-emerald-300" : "text-slate-300"} />
+                      <MiniStat label="拒绝" value={`${selectedChangeFile.rejected}`} tone={selectedChangeFile.rejected ? "text-rose-300" : "text-slate-300"} />
+                      <MiniStat label="待审" value={`${selectedChangeFile.pending}`} tone={selectedChangeFile.pending ? "text-amber-300" : "text-slate-300"} />
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5" data-testid="home-diff-review-actions">
+                      <button
+                        type="button"
+                        onClick={() => setCommandDiffFileHunks(selectedChangeFile.id, "accepted")}
+                        disabled={!selectedChangeFile.hunks.length || commandApproval.status === "running"}
+                        title="接受当前文件 hunk"
+                        aria-label="接受当前文件 hunk"
+                        data-testid="home-diff-accept-all"
+                        className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 text-[10px] text-emerald-200 transition-colors hover:border-emerald-400/40 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        接受
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCommandDiffFileHunks(selectedChangeFile.id, "rejected")}
+                        disabled={!selectedChangeFile.hunks.length || commandApproval.status === "running"}
+                        title="拒绝当前文件 hunk"
+                        aria-label="拒绝当前文件 hunk"
+                        data-testid="home-diff-reject-all"
+                        className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-rose-500/20 bg-rose-500/10 px-2 text-[10px] text-rose-200 transition-colors hover:border-rose-400/40 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        <XCircle className="h-3.5 w-3.5" />
+                        拒绝
+                      </button>
+                    </div>
+                  </>
                 )}
                 <div className="mt-2 flex items-center justify-end gap-2">
                   <button
@@ -20257,17 +20590,13 @@ export function AgentControlCenter({
                   </div>
                 )}
               </div>
-              <div className="codex-context-steps grid grid-cols-5 gap-1">
-                {agentThreadRunbook.steps.map((step, index) => {
-                  const active = step.phase === agentThreadRunbook.phase;
-                  return (
-                    <div key={`home-side-runbook-${step.id}`} title={step.label} className={`h-8 rounded border px-1 py-1 text-center ${active ? "border-cyan-500/40 bg-cyan-500/10 text-cyan-100" : "border-slate-800 bg-slate-950 text-slate-600"}`}>
-                      <div className="text-[10px] leading-none">{index + 1}</div>
-                      <div className="mt-0.5 truncate text-[9px]">{step.label}</div>
-                    </div>
-                  );
-                })}
-              </div>
+              <WorkbenchToolTracePanel
+                rows={homeToolTraceRows}
+                toolCount={agentThreadTraceCounts.tools}
+                gatewayCount={gatewayToolTraceAllRows.length}
+                approvalCount={activeThreadLinkedApprovalRows.length + changeFileRows.length}
+                reportCount={currentThreadRunReports.length}
+              />
               <div className="codex-side-card codex-runtime-terminal rounded-md border border-slate-800 bg-[#0b0f15] px-2.5 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[10px] font-medium text-slate-200">终端 / 运行时</span>
@@ -20286,29 +20615,6 @@ export function AgentControlCenter({
                   <summary className="cursor-pointer text-[10px] text-slate-500">展开运行日志</summary>
                   <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-slate-400">{terminalRuntimeText}</pre>
                 </details>
-              </div>
-              <WorkbenchToolTracePanel
-                rows={homeToolTraceRows}
-                toolCount={agentThreadTraceCounts.tools}
-                gatewayCount={gatewayToolTraceAllRows.length}
-                approvalCount={activeThreadLinkedApprovalRows.length + changeFileRows.length}
-                reportCount={currentThreadRunReports.length}
-              />
-              <div className="grid gap-1.5">
-                {terminalLogRows.slice(0, 8).map((entry) => (
-                  <div key={`home-terminal-${entry.id}`} className="codex-side-row codex-terminal-row rounded border border-slate-800 bg-slate-900/60 px-2.5 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-[10px] font-medium text-slate-200">{entry.title}</span>
-                      <StatusBadge status={entry.status} subtle />
-                    </div>
-                    <div className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{entry.detail}</div>
-                    <div className="mt-1 flex items-center justify-between gap-2 text-[9px] text-slate-600">
-                      <span>{entry.channel}</span>
-                      <span>{formatTime(entry.at)}</span>
-                    </div>
-                  </div>
-                ))}
-                {!terminalLogRows.length && <EmptyBlock text="暂无终端日志" />}
               </div>
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -20493,14 +20799,14 @@ export function AgentControlCenter({
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="codex-left-title text-[12px] font-semibold text-slate-100">织梦</div>
-                  <div className="codex-left-subtitle mt-0.5 truncate text-[10px] text-slate-500">{allWorkspaceSummaries.length} 项目 · {activeAgentThreadCount} 对话 · {unboundThreadCount} 自由</div>
+                  <div className="codex-left-subtitle mt-0.5 truncate text-[10px] text-slate-500">{allWorkspaceSummaries.length} 项目 · {activeAgentThreadCount} 线程 · 对话 {unboundThreadCount}</div>
                 </div>
                 <div className="codex-left-quick-actions flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     onClick={createFreeAgentThreadFromCommand}
-                    title="新建自由对话"
-                    aria-label="新建自由对话"
+                    title="新建对话模式线程"
+                    aria-label="新建对话模式线程"
                     data-testid="agent-home-new-free-thread"
                     className="codex-left-quick-button is-primary"
                   >
@@ -20610,7 +20916,7 @@ export function AgentControlCenter({
               {showWorkspaceListSection && renderWorkspaceListSection()}
               {showPinnedThreadSection && renderThreadListSection("置顶", pinnedAgentThreads)}
               {showProjectThreadSection && renderThreadListSection("项目对话", projectAgentThreads)}
-              {showFreeThreadSection && renderThreadListSection("自由对话", plainAgentThreads)}
+              {showFreeThreadSection && renderThreadListSection("对话模式", plainAgentThreads)}
               {!visibleAgentThreads.length && (
                 <div className="codex-left-empty">
                   {workbenchLayout.agentThreadSearch.trim()
@@ -20624,8 +20930,8 @@ export function AgentControlCenter({
                 <button
                   type="button"
                   onClick={onOpenSettings}
-                  title="设置"
-                  aria-label="设置"
+                  title="模型中心"
+                  aria-label="模型中心"
                   data-testid="agent-home-footer-settings"
                   className="codex-left-footer-button inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-[#e8f3ee] hover:text-slate-900"
                 >
@@ -20715,7 +21021,7 @@ export function AgentControlCenter({
                   <span className="shrink-0 font-medium">打开状态</span>
                 </button>
               )}
-              <div className="codex-message-list grid min-h-0 flex-1 content-start gap-3 overflow-auto px-1 py-2 pr-2">
+              <div className={`codex-message-list grid min-h-0 flex-1 gap-3 overflow-auto px-1 py-2 pr-2 ${threadMessages.length ? "content-start" : "is-empty content-end"}`}>
                   {threadMessages.length ? (
                     <WorkbenchMessageList
                       messages={threadMessages}
@@ -20840,6 +21146,7 @@ export function AgentControlCenter({
                   <div className="h-px bg-[#242934]" />
                   {homeSideTabs.map((tab) => {
                     const active = activeHomeSideTab === tab.id;
+                    const tabStatusLabel = homeSideStatusLabels[tab.status];
                     return (
                       <button
                         key={`home-side-rail-${tab.id}`}
@@ -20848,13 +21155,15 @@ export function AgentControlCenter({
                           if (active && agentHomeSidePanelOpen) setAgentHomeSidePanelOpen(false);
                           else openAgentHomeSidePanel(tab.id);
                         }}
-                        title={tab.title || tab.label}
-                        aria-label={tab.label}
+                        title={`${tab.title || tab.label} · ${tabStatusLabel}`}
+                        aria-label={`${tab.label}：${tabStatusLabel}${tab.count ? `，${tab.count}` : ""}`}
                         data-testid={`agent-home-side-tab-${tab.id}`}
+                        data-side-tab-status={tab.status}
                         className={`codex-side-rail-button ${active ? "is-active" : ""}`}
                       >
                         {tab.icon}
                         <span className="codex-side-rail-label" aria-hidden="true">{tab.shortLabel}</span>
+                        <span className="codex-side-rail-status" aria-hidden="true" title={tabStatusLabel} />
                         {tab.count > 0 && <span className="codex-side-rail-count">{tab.count > 99 ? "99+" : tab.count}</span>}
                       </button>
                     );
@@ -20870,6 +21179,10 @@ export function AgentControlCenter({
                         <div className="codex-side-eyebrow text-[10px] uppercase tracking-wide text-slate-600">{activeHomeSideEyebrow}</div>
                         <div className="codex-side-title mt-1 truncate text-xs font-semibold text-slate-100">{activeHomeSideLabel}</div>
                         <div className="codex-side-help mt-1 line-clamp-2 text-[10px] leading-relaxed text-slate-500">{activeHomeSideHelp}</div>
+                        <div className="codex-side-next-step mt-2 rounded-md border border-[#2a303b] bg-[#0b0f15] px-2 py-1.5 text-[10px] leading-relaxed text-slate-400" data-testid="agent-home-side-next-step">
+                          <span className="font-medium text-slate-200">当前下一步：</span>
+                          {activeHomeSideNextStep}
+                        </div>
                         <div className="codex-side-summary mt-2 flex min-w-0 flex-wrap gap-1.5">
                           {activeHomeSideSummary.map((item) => (
                             <span key={`side-summary-${activeHomeSideTab}-${item.label}`} className="codex-side-summary-pill inline-flex min-w-0 items-center gap-1 rounded border border-[#2a303b] bg-[#0b0f15] px-1.5 py-1 text-[9px] leading-none">
@@ -20916,6 +21229,21 @@ export function AgentControlCenter({
                         </button>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={activeHomeSidePrimaryAction.onClick}
+                      disabled={activeHomeSidePrimaryAction.disabled}
+                      title={activeHomeSidePrimaryAction.detail}
+                      aria-label={`${activeHomeSideLabel}主动作：${activeHomeSidePrimaryAction.label}`}
+                      data-testid="agent-home-side-primary-action"
+                      className="codex-side-primary-action mt-2 inline-flex min-h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-[#2a303b] bg-[#0d1017] px-2.5 py-1.5 text-left text-[10px] text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                        {activeHomeSidePrimaryAction.icon}
+                        <span className="truncate font-medium">{activeHomeSidePrimaryAction.label}</span>
+                      </span>
+                      <span className="truncate text-[9px] text-slate-600">{activeHomeSidePrimaryAction.detail}</span>
+                    </button>
                     {agentHomeToolboxOpen && (
                       <div className="codex-side-toolbox mt-3 grid gap-2 rounded border border-slate-800 bg-[#0b0f15] px-2 py-2">
                         <input
@@ -21051,6 +21379,18 @@ export function AgentControlCenter({
                 <MiniStat label="线程 ID" value={truncateMiddle(activeEditorRunReport.threadId, 12)} />
                 <MiniStat label="工作区" value={activeEditorRunReport.workspaceTitle || "未绑定"} />
                 <MiniStat label="上下文快照" value={`${activeEditorRunReport.contextSnapshotCount}`} />
+              </div>
+              <div className="mt-3 rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-2" data-testid="run-report-next-action">
+                <div className="text-[10px] font-medium text-cyan-100">下一步</div>
+                <div className="mt-1 text-[10px] leading-relaxed text-slate-300">
+                  {activeEditorRunReport.nextAction || "继续对话，或运行 Agent Loop 查看工具轨迹。"}
+                </div>
+              </div>
+              <div className="mt-2 rounded border border-slate-800 bg-slate-950 px-2 py-2" data-testid="run-report-thread-scope">
+                <div className="text-[10px] font-medium text-slate-300">线程边界</div>
+                <div className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                  只显示当前线程 {truncateMiddle(activeEditorRunReport.threadId, 12)} 的工具轨迹、审批、Diff、Worker 和运行日志。
+                </div>
               </div>
               <div className="mt-3 rounded border border-slate-800 bg-slate-950 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
                 {activeEditorRunReport.task || "未记录任务"}
@@ -21307,18 +21647,21 @@ export function AgentControlCenter({
                   icon={<LinkIcon className="h-3.5 w-3.5" />}
                   onClick={() => linkApprovalToActiveThread()}
                   disabled={!activeThread || !selectedApprovalSummary || selectedApprovalLinkedToActiveThread}
+                  testId="editor-approval-link-active-thread"
                 />
                 <ActionButton
                   label={approvalDecision.status === "running" && approvalDecision.decision === "reject" ? "拒绝中" : "拒绝审批"}
                   icon={<XCircle className="h-3.5 w-3.5" />}
                   onClick={() => void decideSelectedApproval("reject")}
                   disabled={!selectedApprovalCanReject}
+                  testId="editor-approval-reject-button"
                 />
                 <ActionButton
                   label={approvalDecision.status === "running" && approvalDecision.decision === "execute" ? "执行中" : `执行 ${selectedApprovalExecutableLabel || "审批"}`}
                   icon={<CheckCircle2 className="h-3.5 w-3.5" />}
                   onClick={() => void decideSelectedApproval("execute")}
                   disabled={!selectedApprovalCanExecute}
+                  testId="editor-approval-execute-button"
                 />
               </div>
               {approvalDecision.approvalId === selectedApprovalIdValue && approvalDecision.status && (
@@ -21722,8 +22065,8 @@ export function AgentControlCenter({
           </div>
           <div className="mt-auto">
             <button
-              title="设置"
-              aria-label="设置"
+              title="模型中心"
+              aria-label="模型中心"
               onClick={onOpenSettings}
               className="flex h-10 w-10 items-center justify-center rounded-md text-slate-500 hover:bg-slate-900 hover:text-slate-200"
             >
@@ -21746,7 +22089,7 @@ export function AgentControlCenter({
               >
                 <div className="text-xs font-semibold text-slate-100">Agent 工作区</div>
                 <div className="mt-0.5 truncate text-[10px] text-slate-500">
-                  {activeAgentThreadCount} 对话 · {allWorkspaceSummaries.length} 项目 · {unboundThreadCount} 自由
+                  {activeAgentThreadCount} 线程 · {allWorkspaceSummaries.length} 项目 · 对话 {unboundThreadCount}
                 </div>
               </button>
               <div className="relative flex shrink-0 items-center gap-1">
@@ -21754,8 +22097,8 @@ export function AgentControlCenter({
                   type="button"
                   onClick={createFreeAgentThreadFromCommand}
                   className="inline-flex h-7 items-center gap-1 rounded-md border border-cyan-500/25 bg-cyan-500/10 px-2 text-[10px] font-medium text-cyan-100 hover:border-cyan-400/50"
-                  title="新建自由对话"
-                  aria-label="新建自由对话"
+                  title="新建对话模式线程"
+                  aria-label="新建对话模式线程"
                   data-testid="workbench-create-free-thread"
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -21945,7 +22288,7 @@ export function AgentControlCenter({
               {showWorkspaceListSection && renderPrimaryWorkspaceListSection()}
               {showPinnedThreadSection && renderThreadListSection("置顶", pinnedAgentThreads)}
               {showProjectThreadSection && renderThreadListSection("项目对话", projectAgentThreads)}
-              {showFreeThreadSection && renderThreadListSection("自由对话", plainAgentThreads)}
+              {showFreeThreadSection && renderThreadListSection("对话模式", plainAgentThreads)}
               {!visibleAgentThreads.length && <EmptyBlock text="暂无可显示对话；可切到全部或清空搜索。" />}
               {filteredAgentThreads.length > visibleAgentThreads.length && (
                 <div className="rounded border border-slate-800 bg-slate-950/40 px-2 py-2 text-[10px] text-slate-600">
@@ -23024,7 +23367,7 @@ export function AgentControlCenter({
                   {agentLoopStatus.detail || "等待任务执行。"}
                 </div>
                 <div className="mt-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-2 text-[10px] leading-relaxed text-slate-500">
-                  任务来源：{threadComposer.trim() ? "输入框" : commandTask.trim() ? "任务草案" : activeThread?.task ? "当前线程" : "暂无任务"}。
+                  任务来源：{threadComposer.trim() ? "输入框" : commandTask.trim() ? "任务草案" : activeAgentLoopTask ? "当前线程" : "暂无任务"}。
                   执行链路：规划 → 上下文 → 工具请求 → Gateway → 结果回灌。
                 </div>
                 {activeThread?.agentLoopResume && activeThread.agentLoopResume.status !== "resumed" && (
@@ -23042,7 +23385,7 @@ export function AgentControlCenter({
                   <button
                     type="button"
                     onClick={() => void runDeepAgentLoop()}
-                    disabled={!modelRuntimeReady || agentLoopStatus.status === "running" || (!threadComposer.trim() && !commandTask.trim() && !activeThread?.task)}
+                    disabled={!modelRuntimeReady || agentLoopStatus.status === "running" || (!threadComposer.trim() && !commandTask.trim() && !activeAgentLoopTask)}
                     title={modelRuntimeReady ? "启动 Agent Loop" : "先配置模型才能执行任务流"}
                     aria-label="启动 Agent Loop"
                     data-testid="workbench-side-agent-loop-run"

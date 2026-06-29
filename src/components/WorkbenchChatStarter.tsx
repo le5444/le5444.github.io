@@ -48,8 +48,8 @@ export function WorkbenchChatStarter({
             </div>
             <div className="codex-chat-empty-copy mt-1 max-w-xl text-[12px] leading-relaxed text-slate-500">
               {projectModeActive
-                ? `当前绑定「${projectLabel}」。从这里发任务、看文件、审变更。`
-                : "这里是主对话。可以直接聊天、传文件或图片，也可以切到项目模式。"}
+                ? `当前绑定「${projectLabel}」。从这里发任务、看文件、审 Diff 和审批。`
+                : "对话模式不绑定目录。可以直接聊天、传文件或图片；需要读写项目时再切到项目模式。"}
             </div>
           </div>
         </div>
@@ -82,7 +82,7 @@ export function WorkbenchChatStarter({
             title={modelTitle}
             data-testid="agent-home-empty-model-link"
           >
-            {modelLabel}
+            {modelReady ? modelLabel : "模型中心"}
           </button>
           <span aria-hidden="true">·</span>
           <span className="truncate">{contextLabel}</span>

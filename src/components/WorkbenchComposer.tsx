@@ -5,6 +5,7 @@ import {
   FileText,
   FolderKanban,
   HardDrive,
+  ImageOff,
   ListChecks,
   MessageSquare,
   MoreHorizontal,
@@ -325,7 +326,7 @@ export function WorkbenchComposer({
             )}
           </div>
           <div className="flex min-w-0 items-center gap-2">
-            <button type="button" onClick={onOpenModelSettings} data-testid="composer-model-pill" className={`codex-model-pill ${agentChatBusy ? "is-running" : canSendToModelNow ? "is-ready" : providerRuntimeProbeFailure ? "is-error" : "is-muted"}`} title={composerModelTitle}>
+            <button type="button" onClick={onOpenModelSettings} data-testid="composer-model-pill" className={`codex-model-pill ${agentChatBusy ? "is-running" : canSendToModelNow ? "is-ready" : providerRuntimeProbeFailure ? "is-error" : "is-muted"}`} title={composerModelTitle} aria-label="打开模型中心">
               <span className="codex-model-dot" />
               {composerModelLabel}
             </button>
@@ -364,9 +365,9 @@ export function WorkbenchComposer({
                 <div className="min-w-0 truncate text-[10px] leading-relaxed text-slate-400" title={modelBlockedPublicTitle}>消息会先留在线程里；连接模型后可继续生成。</div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                <button type="button" onClick={onOpenModelSettings} className="codex-composer-action is-primary" data-testid="composer-open-model" title="打开模型设置" aria-label="打开模型设置">
+                <button type="button" onClick={onOpenModelSettings} className="codex-composer-action is-primary" data-testid="composer-open-model" title="打开模型中心" aria-label="打开模型中心">
                   <Settings className="h-3.5 w-3.5" />
-                  <span>设置</span>
+                  <span>模型中心</span>
                 </button>
                 <button type="button" onClick={onRetryLastUserMessage} disabled={agentChatBusy || !lastUserThreadMessage} className="codex-composer-action is-primary" data-testid="composer-blocker-retry-last" title={canSendToModelNow ? "重新发送上一条用户消息" : "模型可用后再重试上一条消息"} aria-label="重试上一条消息">
                   <RefreshCw className="h-3.5 w-3.5" />
@@ -391,7 +392,23 @@ export function WorkbenchComposer({
             {attachments.map((attachment) => (
               <div key={attachment.id} className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#2a303b] bg-[#0d1017] px-2 py-2" data-testid="agent-home-composer-attachment-card" data-attachment-kind={attachment.kind} data-parse-status={attachment.parseStatus || ""}>
                 <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded bg-slate-900 text-slate-500">
-                  {attachment.kind === "image" && attachment.dataUrl ? <img src={attachment.dataUrl} alt="" className="h-full w-full object-cover" /> : <FileText className="h-4 w-4" />}
+                  {attachment.kind === "image" && attachment.dataUrl ? (
+                    <div className="codex-attachment-thumb-frame">
+                      <img
+                        src={attachment.dataUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.hidden = true;
+                          const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
+                          if (fallback) fallback.hidden = false;
+                        }}
+                      />
+                      <span className="codex-attachment-thumb-fallback" hidden title="图片预览不可用">
+                        <ImageOff className="h-4 w-4" />
+                      </span>
+                    </div>
+                  ) : <FileText className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0">
                   <div className="truncate text-[10px] font-medium text-slate-200">{attachment.name}</div>

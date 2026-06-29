@@ -89,7 +89,7 @@ function shouldShowPreview(preview: string) {
 }
 
 function threadScopeLabel(thread: Pick<AgentThreadRecord, "workspaceId">) {
-  return thread.workspaceId ? "项目" : "自由";
+  return thread.workspaceId ? "项目" : "对话";
 }
 
 function threadListChips(thread: AgentThreadRecord) {
@@ -111,7 +111,7 @@ function threadRowTooltip(thread: Pick<AgentThreadRecord, "summary" | "task" | "
 function emptyTextForSection(label: string, hasActiveWorkspace: boolean) {
   if (label === "置顶") return "暂无置顶对话；可在对话行菜单里置顶。";
   if (label === "项目对话") return hasActiveWorkspace ? "这个项目还没有对话；用左上角菜单新建项目对话。" : "先选择项目，再从左上角菜单新建项目对话。";
-  return "暂无自由对话；点左上角“新对话”开始。";
+  return "暂无对话模式线程；点左上角“新对话”开始。";
 }
 
 interface WorkbenchThreadListSectionProps {
@@ -150,7 +150,7 @@ export function WorkbenchThreadListSection({
   const showEmptyState = !threads.length && (
     (label === "置顶" && activeFilter === "pinned")
     || (label === "项目对话" && activeFilter === "project")
-    || (label === "自由对话" && activeFilter === "free")
+    || (label === "对话模式" && activeFilter === "free")
   );
   return (
     <div className="codex-left-section">

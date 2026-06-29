@@ -35,6 +35,7 @@
     "verify:desktop-provider-chat": "node scripts/verify-desktop-provider-chat-smoke.mjs",
     "smoke:mock-provider": "node scripts/smoke-openai-compatible-server.mjs 5191",
     "verify:provider-config": "node scripts/verify-provider-config-boundary.mjs",
+    "verify:provider-config-paste": "node scripts/verify-provider-config-paste.mjs",
     "verify:provider-switch": "node scripts/verify-provider-switch-tool.mjs",
     "verify:workspace-root": "node scripts/verify-workspace-root-binding.mjs",
     "verify:workspace-scan": "node scripts/verify-workspace-scan-index.mjs",

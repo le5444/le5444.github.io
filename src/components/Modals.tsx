@@ -8,6 +8,7 @@ import { prompts } from "../data/prompts";
 import { extractPromptParams, iconForCategory, normalizePromptTemplate, parseSkillMetadata, summarizeContent, wordCount, type ChatSession } from "../utils/helpers";
 import { loadHistory, type VersionEntry } from "../store/history";
 import { CopyButton } from "./shared";
+import { parseProviderConfigPaste } from "../utils/provider-config-paste";
 
 const modalPanelClass = "w-full max-h-[90vh] min-h-0 rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl flex flex-col overflow-hidden";
 
@@ -216,81 +217,6 @@ function providerProbeFailureMessage(probe: Record<string, unknown>) {
     return reason ? `网络连接失败：${reason}` : "网络连接失败，请检查接口地址、代理、防火墙或 TLS 证书。";
   }
   return (reason || text || "模型列表获取失败。").slice(0, 260);
-}
-
-function normalizeConfigKey(key: string) {
-  return key.toLowerCase().replace(/[\s_.-]+/g, "");
-}
-
-function collectConfigRecords(value: unknown, depth = 0): Record<string, unknown>[] {
-  if (depth > 3 || !value || typeof value !== "object") return [];
-  if (Array.isArray(value)) return value.flatMap((item) => collectConfigRecords(item, depth + 1));
-  const record = value as Record<string, unknown>;
-  return [
-    record,
-    ...Object.values(record).flatMap((item) => collectConfigRecords(item, depth + 1)),
-  ];
-}
-
-function findConfigValue(records: Record<string, unknown>[], aliases: string[]) {
-  const normalizedAliases = new Set(aliases.map(normalizeConfigKey));
-  for (const record of records) {
-    for (const [key, value] of Object.entries(record)) {
-      if (!normalizedAliases.has(normalizeConfigKey(key))) continue;
-      const text = asString(value).trim();
-      if (text) return text;
-    }
-  }
-  return "";
-}
-
-function extractConfigValueFromText(source: string, aliases: string[]) {
-  const escapedAliases = aliases.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-  const pattern = new RegExp(`["']?(${escapedAliases})["']?\\s*[:=]\\s*["']?([^"',\\n\\r}]+)`, "i");
-  const match = source.match(pattern);
-  return match?.[2]?.trim() || "";
-}
-
-function normalizeProviderIdFromText(rawProvider: string): ProviderId | "" {
-  const value = rawProvider.trim().toLowerCase();
-  if (!value) return "";
-  if (value.includes("anthropic") || value.includes("claude")) return "anthropic";
-  if (value.includes("gemini") || value.includes("google")) return "gemini";
-  if (value.includes("ollama")) return "ollama";
-  if (value.includes("openai") || value.includes("compatible") || value.includes("router") || value.includes("codex2api")) return "openai-compatible";
-  return "";
-}
-
-function parseProviderConfigPaste(source: string) {
-  const text = source.trim();
-  const records: Record<string, unknown>[] = [];
-  if (text) {
-    for (const candidate of [text, text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)]) {
-      if (!candidate || !candidate.trim().startsWith("{")) continue;
-      try {
-        records.push(...collectConfigRecords(JSON.parse(candidate)));
-        break;
-      } catch {
-        /* fall through to loose text parsing */
-      }
-    }
-  }
-  const get = (aliases: string[]) => (
-    findConfigValue(records, aliases) || extractConfigValueFromText(text, aliases)
-  ).trim();
-  const apiUrl = get(["apiUrl", "api_url", "baseURL", "baseUrl", "base_url", "endpoint", "url"]);
-  const apiKey = get(["apiKey", "api_key", "apikey", "api-key", "key", "token"]);
-  const modelId = get(["modelId", "model_id", "model", "modelName", "model_name"]);
-  const modelName = get(["displayName", "display_name", "modelLabel", "model_label", "name"]);
-  const rawProvider = get(["provider", "providerId", "provider_id", "type"]);
-  const provider = normalizeProviderIdFromText(rawProvider);
-  return {
-    apiUrl,
-    apiKey,
-    modelId,
-    modelName,
-    provider,
-  };
 }
 
 // Settings Modal
@@ -559,8 +485,8 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
       return { ...base, profiles: nextProfiles, activeProfileId: snapshot.id };
     });
     setModelDiscoveryMessage(saveProfile
-      ? `已把 ${model.id} 填入草稿并保存为常用配置；点击“保存 API 配置”后首页生效。`
-      : `已把 ${model.id} 填入草稿；点击“保存 API 配置”后首页生效。`);
+      ? `草稿已选，保存 API 配置后首页生效；${model.id} 已填入草稿并保存为常用配置。`
+      : `草稿已选，保存 API 配置后首页生效；${model.id} 已填入草稿。`);
   };
   const discoverModels = async () => {
     if (!form.apiUrl.trim()) {
@@ -654,7 +580,7 @@ export function SettingsModal({ open, settings, onClose, onSave }: { open: boole
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-cyan-200"><Settings className="h-5 w-5" /></div>
             <div>
-              <h2 className="text-lg font-semibold text-white">模型设置</h2>
+              <h2 className="text-lg font-semibold text-white">模型中心</h2>
               <p className="text-xs text-slate-500">自定义 API 是主入口；端点模板只是帮你少填地址。</p>
             </div>
           </div>
